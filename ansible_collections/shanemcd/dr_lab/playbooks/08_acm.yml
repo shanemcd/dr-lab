@@ -1,0 +1,15 @@
+---
+- name: ACM stage (multicluster engine on the hub, import the spokes)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Layer ACM on the hub and import the spokes
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.acm

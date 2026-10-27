@@ -1,0 +1,144 @@
+---
+- name: Assert the ACM hub and spokes are known clusters
+  ansible.builtin.assert:
+    that:
+      - acm_cluster in sno_nodes | map(attribute='name') | list
+      - acm_spokes | length >= 1
+      - acm_spokes | difference(sno_nodes | map(attribute='name') | list) | length == 0
+      - acm_cluster not in acm_spokes
+    fail_msg: >-
+      acm_cluster must be an existing cluster and acm_spokes must name
+      other existing clusters; found hub {{ acm_cluster }} and spokes
+      {{ acm_spokes | default([]) }} vs topology
+      {{ sno_nodes | map(attribute='name') | list }}.
+
+- name: Set hub facts
+  ansible.builtin.set_fact:
+    acm_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+
+- name: Ensure the multicluster engine namespace
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ acm_namespace }}
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  register: acm_ns_result
+  changed_when: "'created' in acm_ns_result.stdout"
+
+- name: Ensure the OperatorGroup and Subscription
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: {{ acm_operatorgroup }}
+        namespace: {{ acm_namespace }}
+      spec:
+        # MCE publishes OwnNamespace only.
+        targetNamespaces:
+          - {{ acm_namespace }}
+      ---
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: {{ acm_package }}
+        namespace: {{ acm_namespace }}
+      spec:
+        channel: {{ acm_channel }}
+        installPlanApproval: Automatic
+        name: {{ acm_package }}
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  register: acm_sub_result
+  changed_when: "'created' in acm_sub_result.stdout"
+
+- name: Wait for the operator CSV to be created
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - csv
+      - "-n"
+      - "{{ acm_namespace }}"
+      - "-o"
+      - 'jsonpath={.items[*].metadata.name}'
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  register: acm_csv_created
+  until: acm_csv_created.stdout | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for the operator CSV to report Succeeded
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - "--for=jsonpath={.status.phase}=Succeeded"
+      - csv
+      - "-n"
+      - "{{ acm_namespace }}"
+      - "--all"
+      - "--timeout={{ (acm_csv_timeout_minutes | int) * 60 }}s"
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  changed_when: false
+
+- name: Ensure the MultiClusterEngine custom resource
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: multicluster.openshift.io/v1
+      kind: MultiClusterEngine
+      metadata:
+        name: {{ acm_cr_name }}
+      spec: {}
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  register: acm_cr_result
+  changed_when: "'created' in acm_cr_result.stdout"
+
+- name: Wait for the MultiClusterEngine Available condition
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - "--for=condition=Available"
+      - "multiclusterengine/{{ acm_cr_name }}"
+      - "--timeout={{ (acm_cr_timeout_minutes | int) * 60 }}s"
+  environment:
+    KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+  changed_when: false
+
+- name: Import the spokes into the hub
+  ansible.builtin.include_tasks: spoke.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: acm_spoke_name
+
+- name: ACM summary
+  ansible.builtin.debug:
+    msg: >-
+      ACM OK on {{ acm_cluster }} — MCE {{ acm_cr_name }} Available
+      ({{ acm_channel }}); spokes imported and Available with add-ons
+      ({{ acm_spoke_addons | join(', ') }}): {{ acm_spokes | join(', ') }}.
