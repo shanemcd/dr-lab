@@ -1,0 +1,101 @@
+---
+# Remove the ACM layer: un-import the spokes (ManagedCluster + namespace
+# on the hub, which also triggers klusterlet cleanup on each spoke), then
+# the MultiClusterEngine CR, the operator (Subscription/OperatorGroup),
+# and the namespace. Ordering matters — the MCE CR must go before the
+# operator that finalizes it. All steps are idempotent
+# (oc delete --ignore-not-found) and skip when the hub kubeconfig is gone.
+- name: Stat the hub kubeconfig
+  # Tagged so --tags acm runs it (top-level tasks in an included file
+  # do not inherit the include task's tags).
+  ansible.builtin.stat:
+    path: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: teardown_acm_kubeconfig_stat
+  tags: acm
+
+- name: Run the ACM teardown on the hub
+  # acm_hub_kubeconfig is role-local to the acm role (a set_fact there);
+  # recompute it here from the taxonomy instead.
+  vars:
+    acm_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  when: teardown_acm_kubeconfig_stat.stat.exists
+  tags: acm
+  block:
+
+    - name: Remove the spoke ManagedClusters and namespaces
+      # Deleting the ManagedCluster namespace removes the ManagedCluster
+      # with it; the import controller strips the klusterlet from the
+      # spoke. ManifestWorks must finalize before the namespace goes.
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "managedcluster.cluster.open-cluster-management.io/{{ item }}"
+          - "--ignore-not-found"
+          - "--wait=true"
+          - "--timeout=900s"
+      loop: "{{ acm_spokes }}"
+      environment:
+        KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+      register: teardown_acm_mc
+      changed_when: teardown_acm_mc.stdout | length > 0
+
+    - name: Remove the spoke namespaces left after un-import
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "namespace/{{ item }}"
+          - "--ignore-not-found"
+          - "--wait=true"
+          - "--timeout=900s"
+      loop: "{{ acm_spokes }}"
+      environment:
+        KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+      register: teardown_acm_ns
+      changed_when: teardown_acm_ns.stdout | length > 0
+
+    - name: Remove the MultiClusterEngine custom resource
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "multiclusterengine/{{ acm_cr_name }}"
+          - "-n"
+          - "{{ acm_namespace }}"
+          - "--ignore-not-found"
+          - "--wait=true"
+          - "--timeout=900s"
+      environment:
+        KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+      register: teardown_acm_mce
+      changed_when: teardown_acm_mce.stdout | length > 0
+
+    - name: Remove the Subscription and OperatorGroup
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "subscription.operators.coreos.com/{{ acm_package }}"
+          - "operatorgroup.operators.coreos.com/{{ acm_operatorgroup }}"
+          - "-n"
+          - "{{ acm_namespace }}"
+          - "--ignore-not-found"
+      environment:
+        KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+      register: teardown_acm_sub
+      changed_when: teardown_acm_sub.stdout | length > 0
+
+    - name: Remove the multicluster-engine namespace
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "namespace/{{ acm_namespace }}"
+          - "--ignore-not-found"
+          - "--wait=true"
+          - "--timeout=900s"
+      environment:
+        KUBECONFIG: "{{ acm_hub_kubeconfig }}"
+      register: teardown_acm_hub_ns
+      changed_when: teardown_acm_hub_ns.stdout | length > 0

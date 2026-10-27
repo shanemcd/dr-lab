@@ -46,11 +46,12 @@ ansible-playbook shanemcd.dr_lab.04_ignition
 ansible-playbook shanemcd.dr_lab.05_snos
 ansible-playbook shanemcd.dr_lab.06_install
 ansible-playbook shanemcd.dr_lab.07_virtualization
+ansible-playbook shanemcd.dr_lab.08_acm
 
 # Checks + evidence report
 ansible-playbook shanemcd.dr_lab.verify
 
-# Reverse-layer teardown (all, or --tags vms|network|artifacts|install-data)
+# Reverse-layer teardown (all, or --tags acm|virtualization|vms|network|artifacts|install-data)
 ansible-playbook shanemcd.dr_lab.teardown
 ```
 

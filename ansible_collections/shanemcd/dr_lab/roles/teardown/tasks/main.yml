@@ -1,7 +1,8 @@
 ---
 # teardown: reverse-layer rollback. Layers are TAGGED; a bare run
-# executes every layer in file order (reverse build order): vms →
-# network → artifacts → install-data. Use --tags <layer> for a single
+# executes every layer in file order (reverse build order): acm →
+# virtualization → vms → network → artifacts → install-data. Use
+# --tags <layer> for a single
 # layer. Every task is idempotent — a second teardown run is a no-op.
 # Destructive command tasks are check-guarded, so --check dry-runs the
 # whole playbook.
@@ -148,6 +149,14 @@
     path: "{{ vm_ignition_dir }}"
     state: absent
   tags: vms
+
+# --- Layer: acm (FIRST — reverse build order) -------------------------------
+# Un-import the spokes, then remove MCE from the hub. Included tasks
+# carry `tags: acm` themselves and skip when the hub kubeconfig is gone.
+
+- name: Remove the ACM layer
+  ansible.builtin.include_tasks: teardown-acm.yml
+  tags: acm
 
 # --- Layer: virtualization (per cluster) -------------------------------------
 # Each included task is idempotent (oc delete --ignore-not-found) and
@@ -312,7 +321,8 @@
 - name: Teardown summary
   ansible.builtin.debug:
     msg: >-
-      teardown complete for the requested tags — layers: virtualization, vms,
+      teardown complete for the requested tags — layers: acm, virtualization,
+      vms,
       network, artifacts, install-data. Shared libvirt services, the installed
       host packages, and the pull secret remain. For a rebuild, re-run
       the pipeline from 01 (ignition must be regenerated within a fresh

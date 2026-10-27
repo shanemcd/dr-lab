@@ -9,5 +9,6 @@ ensured by the pipeline itself).
 
 All content lives in the [`shanemcd.dr_lab`](ansible_collections/shanemcd/dr_lab)
 collection — see its [README](ansible_collections/shanemcd/dr_lab/README.md)
-for the topology, usage, and layout. DR content (ACM, Ceph, RamenDR) comes in
-later phases; this repo is phase 1: three converged SNOs.
+for the topology, usage, and layout. Phase 1 (three converged SNOs) is complete; DR content is layered on top:
+OpenShift Virtualization and ACM (multicluster-engine hub with both spokes
+imported) are live. Ceph and RamenDR come next.
