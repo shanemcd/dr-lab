@@ -14,5 +14,7 @@
   import_playbook: 05_snos.yml
 - name: Cluster install stage
   import_playbook: 06_install.yml
+- name: OpenShift Virtualization stage
+  import_playbook: 07_virtualization.yml
 - name: Verification stage
   import_playbook: verify.yml

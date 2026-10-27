@@ -1,0 +1,173 @@
+---
+# Per-cluster OpenShift Virtualization install. Deliberately `oc` and not
+# kubernetes.core.k8s (same convention as cluster_install): the k8s action
+# plugin reads the kubeconfig on the controller as the invoking user, and
+# the per-cluster kubeconfigs are root-owned 0600.
+
+- name: Set per-cluster facts
+  ansible.builtin.set_fact:
+    cluster_name: "{{ sno_node.name }}"
+    cluster_kubeconfig: "{{ install_base_dir }}/{{ sno_node.name }}/auth/kubeconfig"
+
+- name: Ensure the OpenShift Virtualization namespace
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ virtualization_namespace }}
+        labels:
+          openshift.io/cluster-monitoring: "true"
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_ns_result
+  changed_when: "'created' in virtualization_ns_result.stdout"
+
+- name: Ensure the OperatorGroup and Subscription
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: {{ virtualization_operatorgroup }}
+        namespace: {{ virtualization_namespace }}
+      # CSV publishes OwnNamespace only — target the operator's own
+      # namespace (an empty targetNamespaces list would select ALL
+      # namespaces and the install would be rejected).
+      spec:
+        targetNamespaces:
+          - {{ virtualization_namespace }}
+      ---
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: {{ virtualization_package }}
+        namespace: {{ virtualization_namespace }}
+      spec:
+        channel: {{ virtualization_channel }}
+        installPlanApproval: Automatic
+        name: {{ virtualization_package }}
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_sub_result
+  changed_when: "'created' in virtualization_sub_result.stdout"
+
+- name: Wait for the operator CSV to be created
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - csv
+      - "-n"
+      - "{{ virtualization_namespace }}"
+      - "-o"
+      - 'jsonpath={.items[*].metadata.name}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_csv_created
+  until: virtualization_csv_created.stdout | length > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for the operator CSV to report Succeeded
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - "--for=jsonpath={.status.phase}=Succeeded"
+      - csv
+      - "-n"
+      - "{{ virtualization_namespace }}"
+      - "--all"
+      - "--timeout={{ (virtualization_csv_timeout_minutes | int) * 60 }}s"
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  changed_when: false
+
+- name: Ensure the HyperConverged custom resource
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - apply
+      - "-f"
+      - "-"
+    stdin: |
+      apiVersion: hco.kubevirt.io/v1beta1
+      kind: HyperConverged
+      metadata:
+        name: {{ virtualization_hco_name }}
+        namespace: {{ virtualization_namespace }}
+      spec: {}
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_hco_result
+  changed_when: "'created' in virtualization_hco_result.stdout"
+
+- name: Wait for the HyperConverged Available condition
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - "--for=jsonpath={.status.conditions[?(@.type=='Available')].status}=True"
+      - "hco/{{ virtualization_hco_name }}"
+      - "-n"
+      - "{{ virtualization_namespace }}"
+      - "--timeout={{ (virtualization_hco_timeout_minutes | int) * 60 }}s"
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  changed_when: false
+
+- name: Let the virt deployment fleet settle
+  ansible.builtin.command:
+    argv:
+      - sleep
+      - "{{ virtualization_settle_delay_seconds | int | string }}"
+  changed_when: false
+
+- name: Read the virt deployment readiness
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - deployments
+      - "-n"
+      - "{{ virtualization_namespace }}"
+      - "-o"
+      - 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.readyReplicas}{" "}{.spec.replicas}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_deployments
+  changed_when: false
+
+- name: Assert every virt deployment is fully ready
+  ansible.builtin.assert:
+    that:
+      - virtualization_deployments.stdout_lines | length > 0
+      - virtualization_deployments.stdout_lines
+        | select('search', ' 0 ') | list | length == 0
+      - virtualization_deployments.stdout_lines
+        | reject('search', '^\S+ \d+ \d+$') | list | length == 0
+    fail_msg: >-
+      {{ cluster_name }} virt deployments not all ready —
+      {{ virtualization_deployments.stdout_lines | default([]) | join('; ') }}
+
+- name: Cluster virtualization summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster_name }} virtualization OK — operator CSV Succeeded
+      ({{ virtualization_channel }}), HCO {{ virtualization_hco_name }}
+      Available, {{ virtualization_deployments.stdout_lines | length }}
+      deployments ready in {{ virtualization_namespace }}.

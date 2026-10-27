@@ -1,0 +1,15 @@
+---
+- name: OpenShift Virtualization stage (layer the virt stack on the DR pair)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Layer OpenShift Virtualization on the target clusters
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.virtualization

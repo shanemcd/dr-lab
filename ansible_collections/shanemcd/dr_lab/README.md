@@ -45,6 +45,7 @@ ansible-playbook shanemcd.dr_lab.03_network
 ansible-playbook shanemcd.dr_lab.04_ignition
 ansible-playbook shanemcd.dr_lab.05_snos
 ansible-playbook shanemcd.dr_lab.06_install
+ansible-playbook shanemcd.dr_lab.07_virtualization
 
 # Checks + evidence report
 ansible-playbook shanemcd.dr_lab.verify
@@ -62,7 +63,7 @@ Consoles: `https://console-openshift-console.apps.<node>.ocp.lab`
   `topology`, `versions`, `secrets`.
 - `ansible_collections/shanemcd/dr_lab/roles/` — `workspace`, `host_prep`,
   `artifacts`, `network`, `install_config`, `vms`, `cluster_install`,
-  `teardown`, `verify`.
+  `virtualization`, `teardown`, `verify`.
 - Idempotent, check-mode-friendly; teardown reverses exactly the host
   changes the pipeline makes.
 

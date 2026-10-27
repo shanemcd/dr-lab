@@ -1,0 +1,65 @@
+---
+# Remove the OpenShift Virtualization layer from a cluster: the HCO CR,
+# then the operator (Subscription/OperatorGroup), then the namespace.
+# Ordering matters — deleting the namespace first would strand the HCO CR
+# deletion against a terminating operator. All steps are idempotent
+# (oc delete --ignore-not-found) and skip clusters whose kubeconfig is
+# gone (already torn down).
+- name: Set per-cluster facts
+  ansible.builtin.set_fact:
+    cluster_name: "{{ teardown_virt_node.name }}"
+    cluster_kubeconfig: "{{ install_base_dir }}/{{ teardown_virt_node.name }}/auth/kubeconfig"
+
+- name: Stat the cluster kubeconfig
+  ansible.builtin.stat:
+    path: "{{ cluster_kubeconfig }}"
+  register: teardown_virt_kubeconfig_stat
+
+- name: Run the virtualization teardown for this cluster
+  when: teardown_virt_kubeconfig_stat.stat.exists
+  tags: virtualization
+  block:
+
+    - name: Remove the HyperConverged custom resource
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "hco/{{ virtualization_hco_name }}"
+          - "-n"
+          - "{{ virtualization_namespace }}"
+          - "--ignore-not-found"
+          - "--timeout=600s"
+      environment:
+        KUBECONFIG: "{{ cluster_kubeconfig }}"
+      register: teardown_virt_hco
+      changed_when: teardown_virt_hco.stdout | length > 0
+
+    - name: Remove the Subscription and OperatorGroup
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "subscription.operators.coreos.com/{{ virtualization_package }}"
+          - "operatorgroup.operators.coreos.com/{{ virtualization_operatorgroup }}"
+          - "-n"
+          - "{{ virtualization_namespace }}"
+          - "--ignore-not-found"
+      environment:
+        KUBECONFIG: "{{ cluster_kubeconfig }}"
+      register: teardown_virt_sub
+      changed_when: teardown_virt_sub.stdout | length > 0
+
+    - name: Remove the OpenShift Virtualization namespace
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - "namespace/{{ virtualization_namespace }}"
+          - "--ignore-not-found"
+          - "--wait=true"
+          - "--timeout=1200s"
+      environment:
+        KUBECONFIG: "{{ cluster_kubeconfig }}"
+      register: teardown_virt_ns
+      changed_when: teardown_virt_ns.stdout | length > 0

@@ -149,6 +149,18 @@
     state: absent
   tags: vms
 
+# --- Layer: virtualization (per cluster) -------------------------------------
+# Each included task is idempotent (oc delete --ignore-not-found) and
+# skips clusters whose kubeconfig no longer exists (already torn down).
+
+- name: Remove the OpenShift Virtualization layer
+  ansible.builtin.include_tasks: teardown-virtualization.yml
+  loop: "{{ sno_nodes | selectattr('name', 'in', virtualization_clusters) | list }}"
+  loop_control:
+    loop_var: teardown_virt_node
+  # included tasks carry `tags: virtualization` themselves
+  tags: virtualization
+
 # --- Layer: network ----------------------------------------------------------
 
 - name: Inspect the lab libvirt network
@@ -300,8 +312,8 @@
 - name: Teardown summary
   ansible.builtin.debug:
     msg: >-
-      teardown complete for the requested tags — layers: vms, network,
-      artifacts, install-data. Shared libvirt services, the installed
+      teardown complete for the requested tags — layers: virtualization, vms,
+      network, artifacts, install-data. Shared libvirt services, the installed
       host packages, and the pull secret remain. For a rebuild, re-run
       the pipeline from 01 (ignition must be regenerated within a fresh
       {{ ignition_fresh_window_hours }}h window).

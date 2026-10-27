@@ -1,0 +1,21 @@
+---
+# OpenShift Virtualization (kubevirt-hyperconverged): which clusters carry
+# the virt stack. The DR pair hosts the workloads; the hub (ACM) does not.
+virtualization_clusters:
+  - dr-primary
+  - dr-recovery
+
+# The operator lands in its own namespace; the HCO InstallMode is
+# AllNamespaces (the only mode the CSV publishes).
+virtualization_namespace: openshift-cnv
+virtualization_operatorgroup: kubevirt-hyperconverged
+
+# Channel and names — stable publishes the same y-stream as the cluster.
+virtualization_channel: stable
+virtualization_package: kubevirt-hyperconverged
+virtualization_hco_name: kubevirt-hyperconverged
+
+# Convergence knobs: CSV phase polling and the HCO Available condition.
+virtualization_csv_timeout_minutes: 20
+virtualization_hco_timeout_minutes: 30
+virtualization_settle_delay_seconds: 15
