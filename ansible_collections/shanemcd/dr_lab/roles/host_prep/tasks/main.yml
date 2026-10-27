@@ -6,6 +6,11 @@
 # Guest RAM is placed by the kernel's default first-touch policy; no NUMA
 # detection, no numactl prefix, no per-node assertions.
 
+- name: Gather host facts
+  # The playbooks run with gather_facts: false; host_prep is the only
+  # facts consumer, so it gathers its own (cheap, once, explicit).
+  ansible.builtin.setup:
+
 - name: Assert RedHat OS family
   ansible.builtin.assert:
     that:

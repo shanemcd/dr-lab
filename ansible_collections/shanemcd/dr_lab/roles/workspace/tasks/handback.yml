@@ -11,7 +11,7 @@
     - "{{ install_base_dir }}"
     - "{{ vm_assets_dir }}"
     - "{{ artifacts_downloads_dir }}"
-    - "{{ kubeconfig_controller_path | dirname }}"
+    - "{{ kubeconfigs_dir }}"
   loop_control:
     label: "{{ item }}"
   changed_when: false

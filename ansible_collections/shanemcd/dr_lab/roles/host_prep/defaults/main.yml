@@ -36,4 +36,4 @@ host_prep_workspace_dirs: >-
         {'path': vm_logs_dir, 'mode': '0755'},
         {'path': vm_scripts_dir, 'mode': '0755'},
         {'path': vm_run_dir, 'mode': '0755'},
-        {'path': kubeconfig_controller_path | dirname, 'mode': '0755'}] }}
+        {'path': kubeconfigs_dir, 'mode': '0755'}] }}

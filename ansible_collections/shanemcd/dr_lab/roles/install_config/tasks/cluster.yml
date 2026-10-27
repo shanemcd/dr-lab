@@ -166,7 +166,7 @@
   # runs also publish the copy — k8s-module roles need it even when the
   # ignition stage is entirely skipped.
   ansible.builtin.file:
-    path: "{{ kubeconfig_controller_path | dirname }}"
+    path: "{{ kubeconfigs_dir }}"
     state: directory
     owner: "{{ lab_workspace_identity.uid }}"
     group: "{{ lab_workspace_identity.gid }}"
@@ -178,7 +178,7 @@
   # user-owned; both locations remain private (0700 dir / 0600 kubeconfig).
   ansible.builtin.copy:
     src: "{{ kubeconfig_path }}"
-    dest: "{{ kubeconfig_controller_path }}"
+    dest: "{{ kubeconfigs_dir }}/{{ cluster_name }}.kubeconfig"
     owner: "{{ lab_workspace_identity.uid }}"
     group: "{{ lab_workspace_identity.gid }}"
     mode: "0600"

@@ -25,11 +25,14 @@ verification_dir: "{{ vm_assets_dir }}/verification"
 rhsm_entitlement_dir: /etc/pki/entitlement
 rhsm_ca_dir: /etc/rhsm/ca
 
-# Per-cluster kubeconfig plumbing (roles loop over clusters with these
-# derived paths; kubeconfig_path is the installer's auth artifact,
-# kubeconfig_controller_path the user-readable copy used by k8s modules).
+# Per-cluster kubeconfig plumbing: kubeconfig_path is the installer's
+# auth artifact (root-owned 0700); the user-readable copies consumed by
+# k8s modules land per cluster in kubeconfigs_dir as
+# {{ kubeconfigs_dir }}/{{ cluster_name }}.kubeconfig (cluster_name is
+# set per-cluster by the looping roles — the per-cluster path itself is
+# composed there, never at group scope).
 kubeconfig_path: "{{ install_dir }}/auth/kubeconfig"
-kubeconfig_controller_path: "{{ vm_assets_dir }}/kubeconfigs/{{ cluster_name }}.kubeconfig"
+kubeconfigs_dir: "{{ vm_assets_dir }}/kubeconfigs"
 
 # libvirt owns its runtime disks outside the user's artifact workspace.
 libvirt_uri: "qemu:///system"
