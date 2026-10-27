@@ -1,0 +1,33 @@
+---
+# Internal compact single-node ODF on the DR spokes (the working ocp-lab
+# design). Each spoke VM gets extra virtio disks: LSO turns them into
+# localblock PVs, and the StorageCluster runs 1 mon + 3 replica-1 OSDs
+# (ocs-operator's single-node pattern: flexibleScaling, monPVCTemplate +
+# storageDeviceSets on localblock, portable false).
+storage_clusters:
+  - dr-primary
+  - dr-recovery
+
+# Extra virtio disks per spoke VM: one lands the mon PVC (10Gi request,
+# whole-disk PV), three land the OSD PVCs. Equal sizes keep the
+# LocalVolumeSet binding simple — every disk can serve either role.
+storage_disk_size: 100G
+storage_disk_prefix: osd
+
+# Local Storage Operator (LSO): provisions the localblock StorageClass
+# from the raw virtio disks.
+storage_lso_namespace: openshift-local-storage
+storage_lso_channel: stable
+
+# ODF operator + single-node StorageCluster.
+storage_odf_namespace: openshift-storage
+storage_odf_channel: stable-4.22
+storage_cluster_name: sno-storagecluster
+
+# The LSO LocalVolumeSet selects exactly these devices on each spoke
+# (vda is the install disk — never include it).
+storage_local_devices:
+  - /dev/vdb
+  - /dev/vdc
+  - /dev/vdd
+  - /dev/vde

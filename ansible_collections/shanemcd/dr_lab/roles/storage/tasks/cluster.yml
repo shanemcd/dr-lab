@@ -1,0 +1,6 @@
+---
+# Placeholder — filled in with the LSO + ODF per-cluster install in the
+# next iteration of this layer. Kept so main.yml's include stays stable.
+- name: Layer ODF on this cluster
+  ansible.builtin.debug:
+    msg: "ODF install for {{ sno_node.name }} lands in the next iteration"

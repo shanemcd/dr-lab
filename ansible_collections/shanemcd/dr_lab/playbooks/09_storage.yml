@@ -1,0 +1,15 @@
+---
+- name: Storage stage (ODF data disks + compact ODF on the DR spokes)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Layer storage on the DR spokes
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.storage

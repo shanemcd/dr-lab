@@ -18,5 +18,7 @@
   import_playbook: 07_virtualization.yml
 - name: ACM stage
   import_playbook: 08_acm.yml
+- name: Storage stage
+  import_playbook: 09_storage.yml
 - name: Verification stage
   import_playbook: verify.yml
