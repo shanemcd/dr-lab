@@ -1,0 +1,39 @@
+---
+# Resolve the managed-host account before privileged tasks run. Override
+# lab_user when deliberately provisioning another account's workspace.
+# Do not infer account/group names from a home-directory basename.
+lab_user: ""
+lab_user_home: "{{ lab_workspace_identity.home }}"
+
+# Workspace layout. install_base_dir holds secrets: 0700 dir / 0600 files,
+# enforced by the roles that write there. Each SNO gets its OWN install
+# directory below it (install_dir = {{ install_base_dir }}/{{ cluster_name }},
+# set per cluster by the roles that loop over clusters). Everything
+# mutable lives under vm_assets_dir.
+install_base_dir: "{{ lab_user_home }}/ocp-install-dr"
+install_bin_dir: "{{ install_base_dir }}/bin"
+install_dir: "{{ install_base_dir }}/{{ cluster_name }}"
+vm_assets_dir: "{{ lab_user_home }}/ocp-dr"
+artifacts_dir: "{{ vm_assets_dir }}/artifacts"
+artifacts_downloads_dir: "{{ artifacts_dir }}/downloads"
+vm_images_dir: "{{ vm_assets_dir }}/images"
+vm_scripts_dir: "{{ vm_assets_dir }}/scripts"
+vm_ignition_dir: "{{ vm_assets_dir }}/ignition"
+vm_logs_dir: "{{ vm_assets_dir }}/logs"
+vm_run_dir: "{{ vm_assets_dir }}/run"
+verification_dir: "{{ vm_assets_dir }}/verification"
+rhsm_entitlement_dir: /etc/pki/entitlement
+rhsm_ca_dir: /etc/rhsm/ca
+
+# Per-cluster kubeconfig plumbing (roles loop over clusters with these
+# derived paths; kubeconfig_path is the installer's auth artifact,
+# kubeconfig_controller_path the user-readable copy used by k8s modules).
+kubeconfig_path: "{{ install_dir }}/auth/kubeconfig"
+kubeconfig_controller_path: "{{ vm_assets_dir }}/kubeconfigs/{{ cluster_name }}.kubeconfig"
+
+# libvirt owns its runtime disks outside the user's artifact workspace.
+libvirt_uri: "qemu:///system"
+libvirt_runtime_dir: "/var/lib/libvirt/images/dr-lab"
+
+# The RHCOS live ISO each SNO boots (bootstrap-in-place boot model).
+rhcos_live_iso_path: "{{ artifacts_downloads_dir }}/{{ rhcos_iso_image_name }}"

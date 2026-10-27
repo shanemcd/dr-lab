@@ -1,0 +1,43 @@
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>{# hardcode-ok: fixed libvirt XML namespace, not a configurable endpoint #}
+  <name>{{ node.name }}</name>
+  <uuid>{{ node.name | to_uuid }}</uuid>
+  <description>Managed by shanemcd.dr_lab; preserve disks when undefining.</description>
+  <memory unit='bytes'>{{ node.ram | human_to_bytes }}</memory>
+  <currentMemory unit='bytes'>{{ node.ram | human_to_bytes }}</currentMemory>
+  <vcpu placement='static'>{{ node.vcpu }}</vcpu>
+  <os firmware='efi'>
+    <type arch='aarch64' machine='virt'>hvm</type>
+  </os>
+{% if not (libvirt_probe | default(false) | bool) %}
+  <sysinfo type='fwcfg'><entry name='opt/com.coreos/config' file='{{ libvirt_runtime_dir }}/{{ node.name }}.ign'/></sysinfo>
+{% endif %}
+  <features><acpi/></features>
+  <cpu mode='host-passthrough' check='none'/>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>restart</on_crash>
+  <devices>
+    <emulator>{{ qemu_binary_path }}</emulator>
+    <controller type='scsi' index='0' model='virtio-scsi'/>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='{{ libvirt_runtime_dir }}/{{ node.name }}.qcow2'/>
+      <target dev='vda' bus='virtio'/><boot order='1'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/><source file='{{ libvirt_runtime_dir }}/{{ vms_master_iso_name }}'/>
+      <target dev='sda' bus='scsi'/><readonly/><boot order='2'/>
+    </disk>
+{% if not (libvirt_probe | default(false) | bool) %}
+    <interface type='network'>
+      <mac address='{{ mac_base }}:{{ node.mac_suffix }}'/>
+      <source network='{{ libvirt_network_name }}'/><model type='virtio'/>
+      <driver name='vhost'/>
+    </interface>
+{% endif %}
+    <console type='pty'><log file='/var/log/libvirt/qemu/{{ node.name }}.serial.log' append='on'/><target type='serial' port='0'/></console>
+    <video><model type='none'/></video>
+    <memballoon model='none'/>
+  </devices>
+</domain>

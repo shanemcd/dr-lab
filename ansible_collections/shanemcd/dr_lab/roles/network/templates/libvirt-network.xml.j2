@@ -1,0 +1,36 @@
+<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>{# hardcode-ok: fixed libvirt XML namespace, not a configurable endpoint #}
+  <name>{{ libvirt_network_name }}</name>
+  <uuid>{{ libvirt_network_name | to_uuid }}</uuid>
+  <forward mode='nat'/>
+  <bridge name='{{ lab_bridge_name }}' zone='trusted' stp='on' delay='0'/>
+  <domain name='{{ base_domain }}' localOnly='yes'/>
+  <dns>
+{% for server in network_upstream_dns %}
+    <forwarder addr='{{ server }}'/>
+{% endfor %}
+{% for line in network_hosts_block %}
+{% set parts = line.split() %}
+    <host ip='{{ parts[0] }}'>
+{% for hostname in parts[1:] %}
+      <hostname>{{ hostname }}</hostname>
+{% endfor %}
+    </host>
+{% endfor %}
+{% for node in sno_nodes %}
+    <host ip='{{ node.ip }}'><hostname>{{ node.name }}.{{ base_domain }}</hostname></host>
+{% endfor %}
+  </dns>
+  <ip address='{{ lab_gateway_ip }}' netmask='{{ lab_subnet_netmask }}'>
+    <dhcp>
+      <range start='{{ lab_subnet_prefix }}.{{ network_dhcp_range_start_suffix }}' end='{{ lab_subnet_prefix }}.{{ network_dhcp_range_end_suffix }}'/>
+{% for node in sno_nodes %}
+      <host mac='{{ mac_base }}:{{ node.mac_suffix }}' name='{{ node.name }}' ip='{{ node.ip }}'/>
+{% endfor %}
+    </dhcp>
+  </ip>
+  <dnsmasq:options>
+{% for node in sno_nodes %}
+    <dnsmasq:option value='address=/.apps.{{ node.domain }}/{{ node.ip }}'/>
+{% endfor %}
+  </dnsmasq:options>
+</network>

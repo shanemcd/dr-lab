@@ -1,0 +1,33 @@
+---
+# Host preparation knobs. This lab needs NO RHSM entitlement (GA mirror +
+# quay payload only), so rhsm_required is false; the assert is skipped
+# entirely.
+rhsm_required: false
+rhsm_username: ""
+rhsm_password: ""
+rhsm_org_id: ""
+rhsm_activationkey: ""
+
+# Host packages ensured by host_prep (var-driven). aarch64 additions:
+# qemu-system-aarch64 (the distro emulator — no CXL backports needed in
+# this lab) and edk2-aarch64 (AAVMF UEFI firmware for arm64 guests).
+host_packages:
+  - tar
+  - podman
+  - iptables
+  - qemu-img
+  - python3-pip
+  - policycoreutils-python-utils
+  - openssh-clients
+  - bind-utils
+  - dnsmasq
+  - libvirt-client
+  - libvirt-daemon-driver-qemu
+  - libvirt-daemon-driver-network
+  - psmisc
+  - coreos-installer
+  - qemu-system-aarch64
+  - edk2-aarch64
+
+# Python library required on the host by kubernetes.core modules.
+python_kubernetes_package: "kubernetes"

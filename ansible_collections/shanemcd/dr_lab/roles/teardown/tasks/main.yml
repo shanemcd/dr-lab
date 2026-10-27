@@ -1,0 +1,308 @@
+---
+# teardown: reverse-layer rollback. Layers are TAGGED; a bare run
+# executes every layer in file order (reverse build order): vms →
+# network → artifacts → install-data. Use --tags <layer> for a single
+# layer. Every task is idempotent — a second teardown run is a no-op.
+# Destructive command tasks are check-guarded, so --check dry-runs the
+# whole playbook.
+#
+# The libvirt network layer refuses attached guest ports: remove the VM
+# layer first. Shared libvirt services and unrelated resources are
+# retained. For a rebuild after the VM layer or deeper, regenerate
+# ignition within a fresh window.
+
+- name: Require a reachable libvirt service before cleanup
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", list, --all, --name]
+  check_mode: false
+  changed_when: false
+  tags: always
+
+# --- Layer: vms --------------------------------------------------------------
+# Fleet-parallel shutdown: all guest shutdowns fire first (one command),
+# then ONE poller over the fleet until every domain reports shut off,
+# then the destroy force fallback for wedged guests. Never serial
+# per-VM waits.
+
+- name: Check whether each lab domain is defined
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", domuuid, "{{ item.name }}"]
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: teardown_domain_uuid
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  tags: vms
+
+- name: Refuse to manage an unrelated same-name domain
+  ansible.builtin.assert:
+    that: item.stdout | trim == (item.item.name | to_uuid)
+    fail_msg: "Domain {{ item.item.name }} exists with a different UUID — not managed by this lab; remove it manually."
+  loop: "{{ teardown_domain_uuid.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc == 0
+  tags: vms
+
+- name: Set the defined-domain fact
+  ansible.builtin.set_fact:
+    teardown_domains_defined: >-
+      {{ teardown_domain_uuid.results | selectattr('rc', 'equalto', 0)
+         | map(attribute='item') | list }}
+  tags: vms
+
+- name: Power off every defined domain (all shutdowns fire first)
+  when:
+    - teardown_domains_defined | length > 0
+    - not ansible_check_mode
+  ansible.builtin.shell: |
+    set -o pipefail
+    for vm in {{ teardown_domains_defined | map(attribute='name') | map('quote') | join(' ') }}; do
+      virsh -c {{ libvirt_uri | quote }} shutdown "${vm}" >/dev/null 2>&1 || true
+    done
+  args:
+    executable: /bin/bash
+  changed_when: true
+  tags: vms
+
+- name: Wait for all domains to reach shut off (one fleet poller)
+  when:
+    - teardown_domains_defined | length > 0
+    - not ansible_check_mode
+  ansible.builtin.shell: |
+    set -o pipefail
+    for attempt in $(seq 1 {{ vm_stop_wait_retries }}); do
+      pending=0
+      for vm in {{ teardown_domains_defined | map(attribute='name') | map('quote') | join(' ') }}; do
+        state=$(virsh -c {{ libvirt_uri | quote }} domstate "${vm}" 2>/dev/null)
+        if [ "${state}" != "shut off" ]; then pending=1; fi
+      done
+      [ "${pending}" -eq 0 ] && exit 0
+      sleep {{ vm_stop_wait_delay }}
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  register: teardown_vm_wait
+  changed_when: false
+  failed_when: false
+  tags: vms
+
+- name: Read the domain state per defined domain
+  when:
+    - teardown_domains_defined | length > 0
+    - not ansible_check_mode
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", domstate, "{{ node.name }}"]
+  loop: "{{ teardown_domains_defined }}"
+  loop_control:
+    loop_var: node
+    label: "{{ node.name }}"
+  register: teardown_vm_state
+  environment: {LC_ALL: C}
+  failed_when: false
+  changed_when: false
+  tags: vms
+
+- name: Set the wedged domain-name fact
+  when: not ansible_check_mode
+  ansible.builtin.set_fact:
+    teardown_vm_wedged_names: >-
+      {{ (teardown_vm_state.results | default([]))
+         | selectattr('stdout', 'defined')
+         | rejectattr('stdout', 'equalto', 'shut off')
+         | map(attribute='node.name') | list }}
+  tags: vms
+
+- name: Force-destroy the wedged domains
+  when:
+    - not ansible_check_mode
+    - teardown_vm_wedged_names | default([]) | length > 0
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", destroy, "{{ item }}"]
+  loop: "{{ teardown_vm_wedged_names }}"
+  changed_when: true
+  tags: vms
+
+- name: Remove the VM leftovers
+  ansible.builtin.include_tasks: teardown-vm.yml
+  # The included tasks carry `tags: vms` themselves — include_tasks children
+  # do NOT inherit the include task's tags on their own (no `apply` support
+  # in ansible-core 2.19's include refactor).
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    loop_var: node
+    label: "{{ node.name }}"
+  tags: vms
+
+- name: Remove the shared runtime boot ISO
+  ansible.builtin.file:
+    path: "{{ libvirt_runtime_dir }}/{{ vms_master_iso_name }}"
+    state: absent
+  tags: vms
+
+- name: Remove the ignition staging directory
+  ansible.builtin.file:
+    path: "{{ vm_ignition_dir }}"
+    state: absent
+  tags: vms
+
+# --- Layer: network ----------------------------------------------------------
+
+- name: Inspect the lab libvirt network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-info, "{{ libvirt_network_name }}"]
+  register: teardown_network_info
+  check_mode: false
+  environment: {LC_ALL: C}
+  changed_when: false
+  failed_when: false
+  tags: network
+
+- name: Refuse to remove an unrelated same-name network
+  ansible.builtin.assert:
+    that: "(libvirt_network_name | to_uuid) in teardown_network_info.stdout"
+  when: teardown_network_info.rc == 0
+  tags: network
+
+- name: Inspect remaining network attachments
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-port-list, "{{ libvirt_network_name }}", --uuid]
+  register: teardown_network_ports
+  check_mode: false
+  changed_when: false
+  when: teardown_network_info.stdout is search('Active:\s+yes')
+  tags: network
+
+- name: Require stopped domains before network-only teardown
+  ansible.builtin.assert:
+    that: teardown_network_ports.stdout | default('') | trim == ''
+    fail_msg: "Stop the attached lab domains before removing their network."
+  when: not ansible_check_mode
+  tags: network
+
+- name: Stop only the lab libvirt network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-destroy, "{{ libvirt_network_name }}"]
+  when: teardown_network_info.stdout is search('Active:\s+yes')
+  changed_when: true
+  tags: network
+
+- name: Undefine only the lab libvirt network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-undefine, "{{ libvirt_network_name }}"]
+  when: teardown_network_info.rc == 0
+  changed_when: true
+  tags: network
+
+- name: Remove the lab bridge from the firewalld trusted zone (runtime)
+  # Mirror of the network role's interface trust (DHCP-broadcast ingress).
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --zone=trusted
+      - --remove-interface={{ lab_bridge_name }}
+  register: teardown_firewalld_untrust_if_runtime
+  changed_when: "'NOT_ENABLED' not in teardown_firewalld_untrust_if_runtime.stderr"
+  failed_when: false
+  tags: network
+
+- name: Remove the lab bridge from the firewalld trusted zone (permanent)
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --zone=trusted
+      - --remove-interface={{ lab_bridge_name }}
+      - --permanent
+  register: teardown_firewalld_untrust_if_permanent
+  changed_when: "'NOT_ENABLED' not in teardown_firewalld_untrust_if_permanent.stderr"
+  failed_when: false
+  tags: network
+
+- name: Remove the lab subnet trusted source from firewalld (runtime)
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --zone=trusted
+      - --remove-source={{ lab_subnet_cidr }}
+  register: teardown_firewalld_untrust_runtime
+  changed_when: "'NOT_ENABLED' not in teardown_firewalld_untrust_runtime.stderr"
+  failed_when: false
+  tags: network
+
+- name: Remove the lab subnet trusted source from firewalld (permanent)
+  ansible.builtin.command:
+    argv:
+      - firewall-cmd
+      - --zone=trusted
+      - --remove-source={{ lab_subnet_cidr }}
+      - --permanent
+  register: teardown_firewalld_untrust_permanent
+  changed_when: "'NOT_ENABLED' not in teardown_firewalld_untrust_permanent.stderr"
+  failed_when: false
+  tags: network
+
+- name: Remove the lab host-resolution block from /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} dr-lab"
+    state: absent
+  tags: network
+
+- name: Remove the ip_forward sysctl drop-in
+  ansible.builtin.file:
+    path: "/etc/sysctl.d/{{ network_sysctl_conf_name }}"
+    state: absent
+  tags: network
+
+# --- Layer: artifacts --------------------------------------------------------
+
+- name: Remove the artifact downloads directory
+  ansible.builtin.file:
+    path: "{{ artifacts_downloads_dir }}"
+    state: absent
+  tags: artifacts
+
+# --- Layer: install-data (LAST — contains the kubeconfig and secrets) --------
+
+- name: Check whether the artifacts layer still holds content
+  # Safety gate: the install-dir sweep below must not destroy the
+  # downloaded artifacts (oc + openshift-install + RHCOS ISO) when
+  # install-data is requested without the artifacts layer.
+  ansible.builtin.stat:
+    path: "{{ artifacts_downloads_dir }}"
+  register: teardown_artifacts_stat
+  tags: install-data
+
+- name: Remove the VM assets tree
+  # Contents were removed per layer above (disks, ignition, XML, links);
+  # this clears the remainder — the workspace boot ISO, kubeconfig copies,
+  # and empty dirs. Skipped when artifacts still exist: partial teardowns
+  # must not destroy the expensive downloads (the artifacts layer removes
+  # them itself).
+  ansible.builtin.file:
+    path: "{{ vm_assets_dir }}"
+    state: absent
+  when: not teardown_artifacts_stat.stat.exists
+  tags: install-data
+
+- name: Remove the per-cluster install directories
+  ansible.builtin.file:
+    path: "{{ install_base_dir }}/{{ item.name }}"
+    state: absent
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  tags: install-data
+
+- name: Teardown summary
+  ansible.builtin.debug:
+    msg: >-
+      teardown complete for the requested tags — layers: vms, network,
+      artifacts, install-data. Shared libvirt services, the installed
+      host packages, and the pull secret remain. For a rebuild, re-run
+      the pipeline from 01 (ignition must be regenerated within a fresh
+      {{ ignition_fresh_window_hours }}h window).
+  tags: always

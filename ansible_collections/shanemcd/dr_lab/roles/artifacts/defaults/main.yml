@@ -1,0 +1,24 @@
+---
+# artifacts role-scoped knobs; versions/URLs/SHAs live in the versions taxonomy
+# (group_vars/all/versions.yml) and paths (including the artifacts subdirs) in
+# the paths taxonomy (group_vars/all/paths.yml).
+
+# Pinned downloads (checksums are asserted in-role and cross-checked
+# against the mirror's sha256sum.txt).
+artifacts_downloads:
+  - name: openshift_install
+    url: "{{ openshift_client_base_url }}/{{ ocp_version }}/{{ openshift_install_tarball_name }}"
+    dest: "{{ artifacts_downloads_dir }}/{{ openshift_install_tarball_name }}"
+    sha256: "{{ openshift_install_sha256 }}"
+  - name: openshift_client
+    url: "{{ openshift_client_base_url }}/{{ ocp_version }}/{{ openshift_client_tarball_name }}"
+    dest: "{{ artifacts_downloads_dir }}/{{ openshift_client_tarball_name }}"
+    sha256: "{{ oc_sha256 }}"
+
+# Bounded re-fetch for the pinned downloads themselves.
+artifacts_download_retries: 10
+artifacts_download_delay: 60
+
+# Version stamp guarding client-tool extraction (unarchive has no content
+# comparison; the stamp makes re-extraction happen only on version change).
+artifacts_client_stamp_name: ".ocp-version"

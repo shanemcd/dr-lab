@@ -1,0 +1,15 @@
+---
+- name: Install config and ignition stage (per-cluster BiP)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Run the install_config role
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.install_config

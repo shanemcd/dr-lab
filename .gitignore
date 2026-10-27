@@ -1,0 +1,17 @@
+# Ansible: third-party collections (reinstallable via requirements.yml);
+# only our own shanemcd.dr_lab collection is tracked
+ansible_collections/*
+!ansible_collections/shanemcd
+
+# Python runtime artifacts
+__pycache__/
+*.pyc
+.cache/
+
+# Local/editor files
+.DS_Store
+
+# transient run logs (local only)
+site-run.log
+tardown-run.log
+teardown-run.log

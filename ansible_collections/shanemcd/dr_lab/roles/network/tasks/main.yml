@@ -1,0 +1,186 @@
+---
+# libvirt owns this network's bridge, NAT, dnsmasq, DHCP and autostart.
+# Never modify the user's default/hostbridge networks.
+- name: Validate network addressing
+  ansible.builtin.assert:
+    that:
+      - lab_bridge_name | length <= 15
+      - >-
+        network_probe_suffix | int
+        not in ([host_gateway_suffix | int]
+                + (sno_nodes | map(attribute='ip_suffix') | map('int') | list))
+      - >-
+        (range(network_dhcp_range_start_suffix | int,
+               network_dhcp_range_end_suffix | int + 1) | list
+         | intersect([host_gateway_suffix | int, network_probe_suffix | int]
+                     + (sno_nodes | map(attribute='ip_suffix') | map('int') | list))) == []
+
+- name: Select upstream DNS servers
+  ansible.builtin.include_tasks: upstream-dns.yml
+
+- name: Create the libvirt daemon ordering directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/virtqemud.service.d
+    state: directory
+    mode: '0755'
+
+- name: Start libvirt networks before autostart domains
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/virtqemud.service.d/dr-lab-network.conf
+    content: "[Unit]\nRequires=virtnetworkd.service\nAfter=virtnetworkd.service\n"
+    mode: '0644'
+  register: network_daemon_order
+
+- name: Enable the modular libvirt daemons at boot
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+    daemon_reload: "{{ network_daemon_order.changed }}"
+  loop: [virtnetworkd.service, virtqemud.service]
+
+- name: Ensure the domain definition workspace exists
+  ansible.builtin.file:
+    path: "{{ vm_run_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Render the persistent lab network
+  ansible.builtin.template:
+    src: libvirt-network.xml.j2
+    dest: "{{ vm_run_dir }}/libvirt-network.xml"
+    mode: '0644'
+  register: network_xml
+
+- name: Check the lab libvirt network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-info, "{{ libvirt_network_name }}"]
+  register: network_info
+  changed_when: false
+  failed_when: false
+  environment: {LC_ALL: C}
+
+- name: Refuse to overwrite an unrelated same-name network
+  ansible.builtin.assert:
+    that: "(libvirt_network_name | to_uuid) in network_info.stdout"
+    fail_msg: "Network name is in use with a different UUID; select a different libvirt_network_name."
+  when: network_info.rc == 0
+
+- name: Define only the lab network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-define, "{{ vm_run_dir }}/libvirt-network.xml"]
+  when: network_xml.changed or network_info.rc != 0
+  changed_when: true
+
+- name: Autostart the lab network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-autostart, "{{ libvirt_network_name }}"]
+  when: not (network_info.stdout is search('Autostart:\\s+yes'))
+  changed_when: true
+
+- name: Inspect a pre-libvirt bridge only when the network is stopped
+  ansible.builtin.command:
+    argv: [ip, -details, -json, address, show, dev, "{{ lab_bridge_name }}"]
+  register: network_existing_bridge
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: not (network_info.stdout is search('Active:\s+yes'))
+
+- name: Refuse to replace a bridge the lab does not own
+  ansible.builtin.assert:
+    that:
+      - >-
+        network_existing_bridge.rc != 0
+        or ((network_existing_bridge.stdout | from_json)[0].linkinfo.info_kind != 'bridge')
+    fail_msg: >-
+      A bridge named {{ lab_bridge_name }} already exists outside the lab
+      network; remove it or rename the lab bridge.
+  when:
+    - network_existing_bridge is not skipped
+    - network_existing_bridge.rc == 0
+
+- name: Start the lab network
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", net-start, "{{ libvirt_network_name }}"]
+  when: not (network_info.stdout is search('Active:\\s+yes'))
+  changed_when: true
+
+- name: Render the live network reconciler
+  # net-define only applies to stopped networks; additive changes (a new
+  # fleet node on a warm scale-out) must reach the running embedded
+  # dnsmasq through net-update without a network restart.
+  ansible.builtin.template:
+    src: net-reconcile.py.j2
+    dest: "{{ vm_run_dir }}/net-reconcile.py"
+    mode: "0755"
+
+- name: Reconcile live DHCP and DNS entries on the active network
+  # Idempotent: exits 0 with 0 additions when the live network already
+  # matches the rendered XML. Skips itself when the network is not
+  # active (define/start above own that case).
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ vm_run_dir }}/net-reconcile.py"
+      - "{{ vm_run_dir }}/libvirt-network.xml"
+      - "{{ libvirt_uri }}"
+      - "{{ libvirt_network_name }}"
+  register: network_reconcile
+  changed_when: "'added 0 entries' not in network_reconcile.stdout"
+  failed_when: network_reconcile.rc != 0 or 'NET-RECONCILE-FAIL' in network_reconcile.stdout
+
+- name: Persist IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_file: "/etc/sysctl.d/{{ network_sysctl_conf_name }}"
+    reload: true
+
+- name: Preserve host-side cluster name resolution
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: '# {mark} dr-lab'
+    block: "{{ network_hosts_block | join('\n') }}"
+
+- name: Render the isolated lab egress probe
+  ansible.builtin.template:
+    src: network-egress-probe.sh.j2
+    dest: "{{ network_probe_script_path }}"
+    owner: "{{ lab_workspace_identity.uid }}"
+    group: "{{ lab_workspace_identity.gid }}"
+    mode: '0750'
+
+- name: Verify bridge DNS and NAT from an isolated namespace
+  ansible.builtin.command:
+    argv: [bash, "{{ network_probe_script_path }}"]
+  register: network_egress
+  changed_when: false
+
+- name: Resolve each cluster's API through libvirt DNS
+  ansible.builtin.command:
+    argv: [dig, +short, "api.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "{{ item.domain }}"
+  register: network_cluster_dns
+  changed_when: false
+
+- name: Resolve each cluster's ingress wildcard through libvirt DNS
+  ansible.builtin.command:
+    argv: [dig, +short, "x.apps.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "*.{{ item.domain }}"
+  register: network_apps_dns
+  changed_when: false
+
+- name: Verify the network
+  ansible.builtin.assert:
+    that:
+      - "'EGRESS_OK' in network_egress.stdout"
+      - item.stdout | trim == item.item.ip
+  loop: "{{ network_cluster_dns.results + network_apps_dns.results }}"
+  loop_control:
+    label: "{{ item.item.domain }}"

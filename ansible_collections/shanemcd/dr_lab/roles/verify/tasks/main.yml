@@ -1,0 +1,75 @@
+---
+# verify: the full checklist across the three SNO clusters + host gates,
+# then a 0600 evidence report stamped test-only. Read-only. Host gates
+# check that every lab domain is running under libvirt; cluster checks
+# assert each SNO's steady state (node Ready, clusterversion Available at
+# the pinned version, operators Available, pools Updated).
+
+- name: Require a reachable libvirt service
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", list, --all, --name]
+  check_mode: false
+  changed_when: false
+
+- name: Stat the per-cluster kubeconfigs
+  ansible.builtin.stat:
+    path: "{{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: verify_kubeconfig_stat
+
+- name: Assert the clusters are installed
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      No kubeconfig at {{ install_base_dir }}/{{ item.item.name }}/auth/kubeconfig
+      — run 06_vms.yml + 07_install.yml before verification.
+  loop: "{{ verify_kubeconfig_stat.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Read each lab domain state
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", domstate, "{{ item.name }}"]
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: verify_domain_state
+  environment: {LC_ALL: C}
+  changed_when: false
+
+- name: Assert every lab domain is running
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == 'running'
+    fail_msg: >-
+      Domain {{ item.item.name }} is {{ item.stdout | default('') | trim }},
+      expected running.
+    success_msg: >-
+      {{ item.item.name }}: domain running (QEMU pid
+      {{ lookup('file', vm_run_dir ~ '/' ~ item.item.name ~ '.pid', errors='ignore')
+         | default('?', true) | trim }}).
+  loop: "{{ verify_domain_state.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Verify each SNO cluster
+  ansible.builtin.include_tasks: cluster.yml
+  loop: "{{ sno_nodes }}"
+  loop_control:
+    loop_var: sno_node
+    label: "{{ sno_node.name }}"
+
+- name: Write the evidence report
+  ansible.builtin.include_tasks: evidence.yml
+
+- name: Verification summary
+  ansible.builtin.debug:
+    msg: >-
+      verify OK — {{ sno_nodes | map(attribute='name') | join(', ') }}:
+      domains running; each cluster node Ready, clusterversion
+      Available ({{ ocp_version }}), operators Available, pools Updated;
+      evidence at {{ verification_dir }}/{{ verify_evidence_report_name }}
+      (0600, test-only).

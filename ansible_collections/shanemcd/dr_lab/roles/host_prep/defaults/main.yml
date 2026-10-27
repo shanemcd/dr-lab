@@ -1,0 +1,39 @@
+---
+# host_prep role-scoped knobs (cluster-wide values come from group_vars).
+host_prep_sysfs_net_path: /sys/class/net
+
+# Structural device names (not site configuration).
+host_prep_required_devices:
+  - /dev/kvm
+  - /dev/vhost-net
+  - /dev/net/tun
+
+# Headroom margins for the capacity asserts. Disk headroom bounds the
+# nominal overlay sum (guest disks are sparse qcow2 — actual host usage
+# grows only as guests write), so it needs to cover pivot/container writes
+# and monitoring growth, not the full nominal sizes. CPU headroom is low
+# because lab workers are mostly idle and QEMU vCPUs are ordinary host
+# threads, freely scheduled; memory headroom bounds the committed guest
+# RAM + CXL regions (default 2-CXL fleet: 88 GiB committed).
+host_prep_mem_headroom_gib: 12
+host_prep_cpu_headroom: 4
+host_prep_disk_headroom_gib: 30
+
+# Workspace directories ensured by this role (secrets dirs 0700). Each
+# SNO gets its own 0700 install dir below install_base_dir. Ignition
+# staging is not served over HTTP (no ignition server); the merged
+# per-node configs carry install-time credentials — vm_ignition_dir is
+# 0700, matching the install_config role's secrets gate.
+host_prep_workspace_dirs: >-
+  {{ [{'path': install_base_dir, 'mode': '0700'}]
+     + (sno_nodes | map(attribute='name') | map('regex_replace', '^(.*)$', install_base_dir ~ '/\1')
+        | map('community.general.dict_kv', 'path') | map('combine', {'mode': '0700'}) | list)
+     + [{'path': verification_dir, 'mode': '0700'},
+        {'path': vm_assets_dir, 'mode': '0755'},
+        {'path': artifacts_dir, 'mode': '0755'},
+        {'path': vm_images_dir, 'mode': '0755'},
+        {'path': vm_ignition_dir, 'mode': '0700'},
+        {'path': vm_logs_dir, 'mode': '0755'},
+        {'path': vm_scripts_dir, 'mode': '0755'},
+        {'path': vm_run_dir, 'mode': '0755'},
+        {'path': kubeconfig_controller_path | dirname, 'mode': '0755'}] }}

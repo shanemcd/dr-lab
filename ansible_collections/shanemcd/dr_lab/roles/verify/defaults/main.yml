@@ -1,0 +1,18 @@
+---
+# verify role-scoped knobs. Everything here is read-only probing — all
+# tasks report changed=0.
+verify_evidence_report_name: "verify-report.txt"
+
+# Built-in MachineConfigPools that must be Updated (OpenShift-fixed pool
+# names; the SNO's worker pool is empty but still reports Updated).
+verify_mcp_expected_names:
+  - "master"
+  - "worker"
+
+# Cluster settle gate: before asserting, verification waits up to this window
+# (retries x delay) for every operator and the clusterversion to read
+# Available — a freshly converged minimum-spec cluster can flap briefly.
+verify_cluster_settle_retries: 40
+verify_cluster_settle_delay_seconds: 15
+verify_mcp_wait_retries: 20
+verify_mcp_wait_delay_seconds: 30

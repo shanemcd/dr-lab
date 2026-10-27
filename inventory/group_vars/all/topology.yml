@@ -1,0 +1,86 @@
+---
+# Node topology: three independent single-node OpenShift clusters (SNOs),
+# one libvirt VM each, all on this host. Each cluster gets its own:
+#   - cluster name / DNS domain ({{ name }}.{{ base_domain }})
+#   - stable IP + MAC (DHCP reservation)
+#   - pod CIDR and service CIDR (must be unique per cluster AND not overlap
+#     the lab subnet)
+# MACs derive as {{ mac_base }}:{{ item.mac_suffix }} with mac_suffix the
+# hex of the node's ip_suffix; IPs as {{ lab_subnet_prefix }}.{{ item.ip_suffix }}.
+#
+# Fleet roles (mirroring the ocp-lab DR architecture):
+#   dr-hub       - future ACM management hub
+#   dr-primary   - primary workload site
+#   dr-recovery  - recovery workload site
+mac_base: "52:54:00:0d:0d"
+
+# Per-node specs. Hub runs the ACM stack eventually, so it gets headroom;
+# workload SNOs get more (they will carry OpenShift Virtualization + ODF).
+sno_vcpu: 12
+sno_ram: "48G"
+sno_disk: "200G"
+
+clusters:
+  - name: dr-hub
+    role: hub
+    ip_suffix: 11
+    vcpu: "{{ sno_vcpu }}"
+    ram: "{{ sno_ram }}"
+    disk: "{{ sno_disk }}"
+    cluster_network_cidr: "10.128.0.0/14"
+    service_network_cidr: "172.30.0.0/16"
+  - name: dr-primary
+    role: primary
+    ip_suffix: 12
+    vcpu: "{{ sno_vcpu }}"
+    ram: "{{ sno_ram }}"
+    disk: "{{ sno_disk }}"
+    cluster_network_cidr: "10.132.0.0/14"
+    service_network_cidr: "172.31.0.0/16"
+  - name: dr-recovery
+    role: recovery
+    ip_suffix: 13
+    vcpu: "{{ sno_vcpu }}"
+    ram: "{{ sno_ram }}"
+    disk: "{{ sno_disk }}"
+    cluster_network_cidr: "10.136.0.0/14"
+    service_network_cidr: "172.32.0.0/16"
+
+# Flat node list shared by network/vms/install_config roles (each cluster
+# has exactly one node — the BiP master). mac_suffix is the hex of the
+# ip_suffix; node IP / cluster domain derive here so the roles share one
+# source of truth.
+sno_nodes: >-
+  {%- set out = [] -%}
+  {%- for c in clusters -%}
+  {%- set _ = out.append({'name': c.name, 'role': c.role,
+        'ip_suffix': c.ip_suffix, 'mac_suffix': '%02x' % c.ip_suffix,
+        'vcpu': c.vcpu, 'ram': c.ram, 'disk': c.disk,
+        'domain': c.name ~ '.' ~ base_domain,
+        'cluster_network_cidr': c.cluster_network_cidr,
+        'service_network_cidr': c.service_network_cidr,
+        'ip': lab_subnet_prefix ~ '.' ~ c.ip_suffix}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# SNO: the single master is schedulable (it carries the ingress and
+# registry operators; the default IngressController is pinned to it).
+masters_schedulable: true
+
+# Bootstrap-in-place install target: the virtio disk the installer writes
+# the master to — interpolated into install-config (bootstrapInPlace.
+# installationDisk) and the aarch64 boot path.
+bip_installation_disk: "/dev/vda"
+
+# Install-config cluster shape: no workers ever join these clusters.
+upi_compute_replicas: 0
+cluster_fips: false
+
+# Ignition must be consumed within this window of generation (the machine
+# config server certificate validity bounds the useful life of the config).
+ignition_fresh_window_hours: 12
+
+# Guest shutdown window (shared by vms start + teardown's fleet poller):
+# an SNO under load can take minutes to flush and power off gracefully.
+vm_stop_wait_retries: 24
+vm_stop_wait_delay: 10

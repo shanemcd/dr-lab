@@ -1,0 +1,15 @@
+---
+- name: Host preparation (assert and ensure)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Run the host_prep role
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.host_prep

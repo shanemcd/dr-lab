@@ -1,0 +1,15 @@
+---
+- name: Artifact construction stage (client tools, RHCOS live ISO)
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+
+  tasks:
+    - name: Run the artifacts role
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.artifacts

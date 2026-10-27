@@ -1,0 +1,30 @@
+---
+# vms role-scoped knobs. Fleet-level knobs (node shapes/MACs) live in the
+# topology taxonomy since install_config and the ops roles share them.
+
+# The install target's bootindex: the virtio disk outranks the live ISO so
+# the installed disk wins once install-to-disk has written it.
+vms_disk_bootindex: 0
+
+# The metal live ISO boots platform=metal (fw_cfg ignition ignored) with a
+# VGA/TTY-only console — useless headless. A prepared copy is made with
+# qemu-platform + serial-console kernel args (the ignition itself stays in
+# fw_cfg; the ISO copy is only a boot-medium variant). Shared by all three
+# SNOs — the args are node-independent.
+vms_iso_kargs:
+  - "ignition.platform.id=qemu"
+  - "console=tty0"
+  - "console=ttyAMA0,115200n8"
+
+# Prepared boot-medium name (workspace copy; staged per node into
+# libvirt's runtime dir).
+vms_master_iso_name: "rhcos-install.iso"
+
+# Serial-log boot marker polled for boot evidence (kernel banner).
+vms_boot_marker: "Linux version"
+vms_boot_marker_retries: 120
+vms_boot_marker_delay: 5
+
+# Distro emulator for aarch64 guests (Fedora package qemu-system-aarch64;
+# firmware via edk2-aarch64 — both ensured in host_packages).
+qemu_binary_path: "/usr/bin/qemu-system-aarch64"

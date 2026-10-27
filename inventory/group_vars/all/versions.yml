@@ -1,0 +1,34 @@
+---
+# Versions, sources, and checksums — the sanctioned home for these
+# literals. GA-only lab: client tools come from the OpenShift mirror
+# (per-arch), cross-checked against the mirror's sha256sum.txt; the RHCOS
+# live ISO comes from the installer-declared stream metadata, pin
+# cross-checked in-role. Roles refuse to proceed on empty pins.
+#
+# Host arch (aarch64 on this Ampere lab) selects the mirror tree and the
+# RHCOS ISO arch.
+ocp_version: "4.22.16"
+ocp_arch: "aarch64"
+
+ocp_ga_client_base_url: "https://mirror.openshift.com/pub/openshift-v4/{{ ocp_arch }}/clients/ocp"
+openshift_client_base_url: "{{ ocp_ga_client_base_url }}"
+openshift_install_tarball_name: "openshift-install-linux-{{ ocp_version }}.tar.gz"
+openshift_client_tarball_name: "openshift-client-linux-{{ ocp_version }}.tar.gz"
+openshift_mirror_sha256sum_name: "sha256sum.txt"
+
+# Pinned from the aarch64 mirror's sha256sum.txt (cross-checked by the
+# artifacts role on every run).
+openshift_install_sha256: "9184d4d23125357eab7f44586cded46fce177eb6135ac8dd95ab104d018c94a8"
+oc_sha256: "b99e629ade6834abdbe0218acd7cbc05432c491e84566a72d7f3f21884d2820d"
+
+# RHCOS for the lab OS stream. The artifacts role reads the
+# installer-declared stream metadata via
+# `openshift-install coreos print-stream-json --stream {{ rhcos_stream_name }}`
+# and asserts it declares exactly this ISO name + sha256.
+rhcos_stream_name: "rhel-9"
+rhcos_iso_format_key: "iso"
+rhcos_iso_image_name: "rhcos-9.8.20260715-1-live-iso.aarch64.iso"
+rhcos_iso_sha256: "8e77b50a6953891df157a75f2b57b71971785a3dc05efabcd4acce343258eab9"
+
+# GA installs need no feature gates.
+install_feature_set: ""

@@ -1,0 +1,180 @@
+---
+# artifacts: construct every external input — pinned downloads
+# (installer, oc, RHCOS live ISO), SHA-verified. All checksums pinned in
+# versions.yml; the mirror's sha256sum.txt is cross-checked and the RHCOS
+# pin is cross-checked against the installer-declared stream metadata.
+
+- name: Ensure artifact directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ artifacts_downloads_dir }}"
+    - "{{ install_bin_dir }}"
+
+- name: Download pinned client tools
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: "0644"
+    checksum: "sha256:{{ item.sha256 }}"
+  loop: "{{ artifacts_downloads }}"
+  register: artifacts_pinned_download
+  until: artifacts_pinned_download is succeeded
+  retries: "{{ artifacts_download_retries }}"
+  delay: "{{ artifacts_download_delay }}"
+
+- name: Stat downloaded client tools
+  ansible.builtin.stat:
+    path: "{{ item.dest }}"
+    checksum_algorithm: sha256
+  loop: "{{ artifacts_downloads }}"
+  register: artifacts_stat
+
+- name: Assert pinned client-tool checksums
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.checksum == item.item.sha256
+    success_msg: "{{ item.item.name }} sha256 verified ({{ item.stat.checksum }})."
+    fail_msg: >-
+      {{ item.item.name }} sha256 mismatch: expected {{ item.item.sha256 }},
+      got {{ item.stat.checksum | default('missing') }} — remove {{ item.item.dest }}
+      and re-run, or fix the pin in versions.yml.
+  loop: "{{ artifacts_stat.results }}"
+
+# --- mirror checksum cross-check -------------------------------------------
+# The GA mirror publishes a sha256sum.txt the pinned client checksums are
+# cross-checked against.
+
+- name: Download the mirror checksum manifest
+  ansible.builtin.get_url:
+    url: "{{ openshift_client_base_url }}/{{ ocp_version }}/{{ openshift_mirror_sha256sum_name }}"
+    dest: "{{ artifacts_downloads_dir }}/{{ openshift_mirror_sha256sum_name }}"
+    mode: "0644"
+
+- name: Read mirror-declared client tool checksums
+  ansible.builtin.slurp:
+    src: "{{ artifacts_downloads_dir }}/{{ openshift_mirror_sha256sum_name }}"
+  register: artifacts_mirror_sums_raw
+
+- name: Set mirror-declared checksums fact
+  ansible.builtin.set_fact:
+    artifacts_mirror_sums: >-
+      {{ dict((artifacts_mirror_sums_raw.content | b64decode | trim)
+         | regex_findall('(?m)^([0-9a-f]{64})\s+(\S+)$')
+         | map('reverse') | map('list')) }}
+
+- name: Cross-check pinned client checksums against mirror declarations
+  ansible.builtin.assert:
+    that:
+      - artifacts_mirror_sums[openshift_install_tarball_name] == openshift_install_sha256
+      - artifacts_mirror_sums[openshift_client_tarball_name] == oc_sha256
+    fail_msg: >-
+      Pinned client tool checksums disagree with the mirror's sha256sum.txt
+      ({{ artifacts_mirror_sums | dict2items | selectattr('key', 'in',
+      [openshift_install_tarball_name, openshift_client_tarball_name]) | list }}) —
+      re-pin versions.yml for the new release.
+
+- name: Stat client tools stamp
+  ansible.builtin.stat:
+    path: "{{ install_bin_dir }}/{{ artifacts_client_stamp_name }}"
+  register: artifacts_client_stamp_stat
+
+- name: Read client tools stamp
+  ansible.builtin.slurp:
+    src: "{{ install_bin_dir }}/{{ artifacts_client_stamp_name }}"
+  register: artifacts_client_stamp_raw
+  when: artifacts_client_stamp_stat.stat.exists
+
+- name: Set client tools extraction need fact
+  ansible.builtin.set_fact:
+    artifacts_clients_need_extract: >-
+      {{ not artifacts_client_stamp_stat.stat.exists
+         or (artifacts_client_stamp_raw.content | default('') | b64decode | trim) != ocp_version }}
+
+- name: Extract OpenShift client tools
+  ansible.builtin.unarchive:
+    src: "{{ artifacts_downloads_dir }}/{{ item }}"
+    dest: "{{ install_bin_dir }}"
+    remote_src: true
+  loop:
+    - "{{ openshift_install_tarball_name }}"
+    - "{{ openshift_client_tarball_name }}"
+  when: artifacts_clients_need_extract | bool
+
+- name: Write client tools stamp
+  ansible.builtin.copy:
+    content: "{{ ocp_version }}"
+    dest: "{{ install_bin_dir }}/{{ artifacts_client_stamp_name }}"
+    mode: "0644"
+  when: artifacts_clients_need_extract | bool
+
+- name: Read the installer version
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/openshift-install"
+      - version
+  register: artifacts_install_version
+  changed_when: false
+
+- name: Assert installer version
+  ansible.builtin.assert:
+    that:
+      - ocp_version in artifacts_install_version.stdout
+    fail_msg: >-
+      {{ install_bin_dir }}/openshift-install does not report {{ ocp_version }} —
+      remove the stamp/binaries and re-run.
+
+# --- RHCOS live ISO (each SNO's boot media) ---------------------------------
+# The rhel-9 stream metadata declares the ISO (name binds the build, sha
+# binds the content) and the pin is cross-checked against it.
+
+- name: Read RHCOS stream metadata for the lab OS stream
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/openshift-install"
+      - coreos
+      - print-stream-json
+      - "--stream"
+      - "{{ rhcos_stream_name }}"
+  register: artifacts_rhcos_stream
+  changed_when: false
+
+- name: Set RHCOS live ISO facts from stream metadata
+  ansible.builtin.set_fact:
+    artifacts_rhcos_iso_url: >-
+      {{ (artifacts_rhcos_stream.stdout | from_json).architectures[ocp_arch].artifacts.metal
+         .formats[rhcos_iso_format_key].disk.location }}
+    artifacts_rhcos_iso_sha: >-
+      {{ (artifacts_rhcos_stream.stdout | from_json).architectures[ocp_arch].artifacts.metal
+         .formats[rhcos_iso_format_key].disk.sha256 }}
+
+- name: Assert stream-declared RHCOS live ISO matches the pin
+  ansible.builtin.assert:
+    that:
+      - artifacts_rhcos_iso_sha == rhcos_iso_sha256
+      - artifacts_rhcos_iso_url | basename == rhcos_iso_image_name
+    fail_msg: >-
+      The {{ rhcos_stream_name }} stream declares ISO
+      {{ artifacts_rhcos_iso_url | basename }} sha256
+      {{ artifacts_rhcos_iso_sha }} but versions.yml pins
+      {{ rhcos_iso_image_name }} / {{ rhcos_iso_sha256 }} — the stream
+      moved; re-pin deliberately.
+
+- name: Download RHCOS live ISO (declared checksum)
+  ansible.builtin.get_url:
+    url: "{{ artifacts_rhcos_iso_url }}"
+    dest: "{{ rhcos_live_iso_path }}"
+    mode: "0644"
+    checksum: "sha256:{{ artifacts_rhcos_iso_sha }}"
+
+- name: Artifacts summary
+  ansible.builtin.debug:
+    msg: >-
+      artifacts OK ({{ ocp_version }}, {{ ocp_arch }}) — client tools
+      extracted to {{ install_bin_dir }} and cross-checked against the
+      mirror manifest, RHCOS live ISO
+      {{ rhcos_live_iso_path | basename }} verified against the
+      {{ rhcos_stream_name }} stream.

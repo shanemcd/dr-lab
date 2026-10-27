@@ -1,0 +1,49 @@
+---
+# Per-VM removal (included with loop_var: node): persistent domain,
+# runtime media, original workspace disk, and compatibility links. All
+# idempotent — absent resources are skipped. The guest shutdown itself
+# happens at fleet level in tasks/main.yml (parallel shutdown + one
+# poller + destroy fallback).
+#
+# Every task here carries the vms layer tag explicitly: include_tasks
+# children do NOT inherit the include task's tags, so without this a
+# `--tags vms` partial run would silently skip the per-VM cleanup.
+
+- name: Check the lab domain before undefining it
+  tags: vms
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", domuuid, "{{ node.name }}"]
+  register: teardown_domain_uuid
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to undefine an unrelated domain
+  tags: vms
+  ansible.builtin.assert:
+    that: teardown_domain_uuid.stdout | trim == (node.name | to_uuid)
+    fail_msg: >-
+      Domain {{ node.name }} exists with a different UUID — not managed
+      by this lab; remove it manually.
+  when: teardown_domain_uuid.rc == 0
+
+- name: Undefine only the lab domain (never remove storage implicitly)
+  tags: vms
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", undefine, "{{ node.name }}"]
+  when: teardown_domain_uuid.rc == 0
+  changed_when: true
+
+- name: Remove the domain runtime files
+  tags: vms
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ libvirt_runtime_dir }}/{{ node.name }}.qcow2"
+    - "{{ libvirt_runtime_dir }}/{{ node.name }}.ign"
+    - "/var/log/libvirt/qemu/{{ node.name }}.serial.log"
+    - "{{ vm_run_dir }}/{{ node.name }}.xml"
+    - "{{ vm_run_dir }}/{{ node.name }}.pid"
+    - "{{ vm_logs_dir }}/{{ node.name }}.serial.log"
+    - "{{ vm_images_dir }}/{{ node.name }}.qcow2"

@@ -1,0 +1,18 @@
+DR LAB VERIFICATION REPORT
+STAMP: test-only lab.
+
+HOST GATES
+{% for r in verify_domain_state.results %}
+{{ r.item.name }}: domain {{ r.stdout | default('') | trim }}
+{% endfor %}
+
+CLUSTER STATE (per SNO)
+{% for name, c in verify_cluster_report.items() %}
+--- {{ name }} ---
+nodes: {{ c.nodes | join('; ') }}
+clusterversion: desired {{ c.clusterversion[0] }}, Available {{ c.clusterversion[1] }}
+machine config pools: {{ c.mcps | join('; ') }}
+operators Available: {{ c.operators_available }} of {{ c.operators_total }}
+domain state: {{ c.domain_state }}
+console: https://console-openshift-console.apps.{{ name }}.{{ base_domain }}
+{% endfor %}

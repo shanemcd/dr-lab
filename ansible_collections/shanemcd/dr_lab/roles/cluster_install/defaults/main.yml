@@ -1,0 +1,18 @@
+---
+# cluster_install role-scoped knobs; all timeouts are vars per the DoDs.
+# OpenShift API object names (namespaces, CR names, the machine-os-puller
+# SA) are cluster constants, not lab taxonomy.
+
+# API-ready poll: covers the whole live-env bootstrap + install-to-disk +
+# first boot when run right after vms start (~2h window); re-runs on a
+# converged cluster return immediately.
+cluster_install_api_ready_retries: 240
+cluster_install_api_ready_delay_seconds: 30
+
+# Operator settle wait (monitoring rolls out slowly on a fresh cluster).
+cluster_install_operator_retries: 60
+cluster_install_operator_delay_seconds: 30
+
+# OpenShift object constants.
+cluster_install_mco_namespace: "openshift-machine-config-operator"
+cluster_install_mos_puller_sa: "machine-os-puller"

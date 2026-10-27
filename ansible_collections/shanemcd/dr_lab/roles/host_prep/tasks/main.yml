@@ -1,0 +1,286 @@
+---
+# host_prep: assert the lab host is suitable and ensure everything the lab
+# needs. Read-only asserts + idempotent ensures.
+#
+# NUMA: guest memory is NOT pinned.
+# Guest RAM is placed by the kernel's default first-touch policy; no NUMA
+# detection, no numactl prefix, no per-node assertions.
+
+- name: Assert RedHat OS family
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['os_family'] == 'RedHat'
+    fail_msg: >-
+      This lab requires a RedHat-family host (RHEL, CentOS, Fedora); found
+      {{ ansible_facts['os_family'] | default('unknown') }}.
+
+- name: Record SELinux status
+  ansible.builtin.set_fact:
+    host_prep_selinux_status: "{{ (ansible_facts.get('selinux') or {}).get('status', 'missing') }}"
+
+- name: Assert the generated node topology is sane
+  ansible.builtin.assert:
+    that:
+      - sno_nodes | length == clusters | length
+      - sno_nodes | length >= 1
+      - sno_nodes | map(attribute='ip_suffix') | list
+        | length == sno_nodes | map(attribute='ip_suffix') | unique | list | length
+      - sno_nodes | map(attribute='ip_suffix') | max
+        < network_dhcp_range_start_suffix
+      - sno_nodes | map(attribute='name') | list
+        | length == sno_nodes | map(attribute='name') | unique | list | length
+      - sno_nodes | map(attribute='domain') | list
+        | length == sno_nodes | map(attribute='domain') | unique | list | length
+    fail_msg: >-
+      The generated topology is inconsistent: each cluster needs exactly one
+      node, IP suffixes/names/domains unique, IP suffixes below the dnsmasq
+      free range start ({{ network_dhcp_range_start_suffix }}). Check
+      topology.yml.
+
+- name: Set the per-node RAM specs for the committed-RAM measure
+  ansible.builtin.set_fact:
+    host_prep_node_mem_specs: >-
+      {% for n in sno_nodes %}{{ n.name }}={{ n.ram | regex_replace('G$', '') }} {% endfor %}
+
+- name: Measure guest RAM already committed by running lab VMs
+  # Resume path (observed live): a mid-install re-run with part of the
+  # fleet already up failed the bare-host memory assert, although the
+  # running QEMU guests hold exactly the RAM the topology asks for. Their
+  # committed guest RAM therefore counts toward the budget (they are this
+  # lab's own VMs, identified via the run-dir pidfiles with live pids —
+  # the same liveness rule the run scripts' --status uses). Page cache is
+  # reclaimable, so the budget reads MemAvailable, never MemFree.
+  ansible.builtin.shell: |
+    set -euo pipefail
+    committed=0
+    for spec in {{ host_prep_node_mem_specs }}; do
+      name="${spec%%=*}"
+      gib="$(( ${spec#*=} ))"
+      pidfile="{{ vm_run_dir }}/${name}.pid"
+      [ -r "${pidfile}" ] || continue
+      pid="$(cat "${pidfile}" 2>/dev/null || true)"
+      if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
+        continue
+      fi
+      committed=$(( committed + gib ))
+    done
+    echo "${committed}"
+  register: host_prep_running_vm_mem
+  changed_when: false
+
+- name: Compute guest resource requirements
+  ansible.builtin.set_fact:
+    host_prep_required_mem_gib: >-
+      {{ sno_nodes | map(attribute='ram') | map('regex_replace', 'G$', '') | map('int') | sum }}
+    host_prep_required_vcpu: >-
+      {{ sno_nodes | map(attribute='vcpu') | sum }}
+    host_prep_required_disk_gib: >-
+      {{ sno_nodes | map(attribute='disk') | map('regex_replace', 'G$', '') | map('int') | sum }}
+    host_prep_available_mem_gib: >-
+      {{ (ansible_facts['memory_mb']['nocache']['free'] / 1024)
+         + (host_prep_running_vm_mem.stdout | int) }}
+
+- name: Assert memory capacity
+  ansible.builtin.assert:
+    that:
+      - host_prep_available_mem_gib >= host_prep_required_mem_gib + host_prep_mem_headroom_gib
+    fail_msg: >-
+      Free memory is {{ host_prep_available_mem_gib | round(0) | int }} GiB but the
+      topology needs {{ host_prep_required_mem_gib }} GiB plus
+      {{ host_prep_mem_headroom_gib }} GiB headroom.
+
+- name: Assert CPU capacity
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['processor_vcpus'] >= host_prep_required_vcpu + host_prep_cpu_headroom
+    fail_msg: >-
+      Host has {{ ansible_facts['processor_vcpus'] }} vCPUs but the topology needs
+      {{ host_prep_required_vcpu }} plus {{ host_prep_cpu_headroom }} headroom.
+
+- name: Ensure workspace directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop: "{{ host_prep_workspace_dirs }}"
+
+# --- install pull secret ----------------------------------------------------
+
+- name: Stat the base pull secret
+  ansible.builtin.stat:
+    path: "{{ install_pull_secret_path }}"
+  register: host_prep_pull_secret_stat
+
+- name: Assert the base pull secret exists
+  ansible.builtin.assert:
+    that:
+      - host_prep_pull_secret_stat.stat.exists
+      - host_prep_pull_secret_stat.stat.mode == '0600'
+    fail_msg: >-
+      Base pull secret missing or not 0600 at {{ install_pull_secret_path }} —
+      provide a valid OpenShift pull secret (0600).
+
+- name: Assert the pull secret parses as JSON
+  # Raw content is never logged — only the parse verdict.
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.file', install_pull_secret_path) | from_json is mapping
+    fail_msg: >-
+      The pull secret at {{ install_pull_secret_path }} is not valid JSON.
+  no_log: true
+
+- name: Read free space at vm_assets_dir
+  ansible.builtin.command:
+    cmd: "df -B1G --output=avail {{ vm_assets_dir }}"
+  register: host_prep_df
+  changed_when: false
+
+- name: Read current lab disk usage at vm_assets_dir
+  # Re-runs must not double-count the lab's own footprint: the disks the
+  # capacity assert reserves space for already exist and hold part of the
+  # disk. Budgeting free + current lab usage keeps the invariant "the lab
+  # can exist at full nominal size" stable across first run and re-runs.
+  ansible.builtin.command:
+    cmd: "du -sBG {{ vm_assets_dir }}"
+  register: host_prep_du
+  changed_when: false
+  failed_when: false
+
+- name: Set disk budget GiB (free + existing lab usage)
+  ansible.builtin.set_fact:
+    host_prep_disk_budget_gib: >-
+      {{ (host_prep_df.stdout_lines | last | trim | int)
+         + (host_prep_du.stdout.split()[0] | regex_replace('G$', '') | int if host_prep_du is succeeded else 0) }}
+
+- name: Assert disk capacity at vm_assets_dir
+  ansible.builtin.assert:
+    that:
+      - host_prep_disk_budget_gib | int >= host_prep_required_disk_gib | int + host_prep_disk_headroom_gib | int
+    fail_msg: >-
+      Disk budget (free + existing lab usage) at {{ vm_assets_dir }} is
+      {{ host_prep_disk_budget_gib }} GiB but the guest disks need
+      {{ host_prep_required_disk_gib }} GiB plus
+      {{ host_prep_disk_headroom_gib }} GiB headroom.
+
+- name: Stat required devices
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ host_prep_required_devices }}"
+  register: host_prep_devices
+
+- name: Assert required devices exist as character devices
+  ansible.builtin.assert:
+    that:
+      - host_prep_devices.results | selectattr('stat.exists') | list | length
+        == host_prep_required_devices | length
+      - host_prep_devices.results | selectattr('stat.ischr') | list | length
+        == host_prep_required_devices | length
+    fail_msg: >-
+      Required character devices missing: compare {{ host_prep_required_devices }}
+      against stat results.
+
+- name: Stat lab bridge link
+  ansible.builtin.stat:
+    path: "{{ host_prep_sysfs_net_path }}/{{ lab_bridge_name }}"
+  register: host_prep_bridge_link
+
+- name: Stat lab bridge identity (present only on bridge devices)
+  ansible.builtin.stat:
+    path: "{{ host_prep_sysfs_net_path }}/{{ lab_bridge_name }}/bridge"
+  register: host_prep_bridge_dir
+  when: host_prep_bridge_link.stat.exists
+
+- name: Assert lab bridge name is free or already a bridge
+  ansible.builtin.assert:
+    that:
+      - not host_prep_bridge_link.stat.exists or host_prep_bridge_dir.stat.exists | default(false)
+    fail_msg: >-
+      {{ lab_bridge_name }} already exists and is not a bridge — refusing to touch it.
+
+- name: Read host IPv4 addresses as JSON
+  ansible.builtin.command:
+    cmd: ip -j -4 addr show
+  register: host_prep_addrs
+  changed_when: false
+
+- name: Assert lab subnet addresses only exist on the lab bridge
+  ansible.builtin.assert:
+    that:
+      - host_prep_addrs.stdout | from_json | selectattr('ifname', '!=', lab_bridge_name)
+        | selectattr('addr_info', 'defined') | map(attribute='addr_info') | flatten
+        | selectattr('local', 'defined') | map(attribute='local')
+        | select('search', lab_subnet_prefix) | list | length == 0
+    fail_msg: >-
+      Addresses inside {{ lab_subnet_prefix }}.x already exist on interfaces other
+      than {{ lab_bridge_name }} — the lab subnet conflicts with this host.
+
+- name: Read NTP synchronization state
+  ansible.builtin.command:
+    cmd: timedatectl show --property=NTPSynchronized --value
+  register: host_prep_ntp
+  changed_when: false
+
+- name: Assert NTP is synchronized
+  ansible.builtin.assert:
+    that:
+      - host_prep_ntp.stdout | trim == 'yes'
+    fail_msg: NTP is not synchronized — the cluster needs accurate time.
+
+- name: Detect rpm-ostree (atomic) host
+  ansible.builtin.stat:
+    path: /run/ostree-booted
+  register: host_prep_ostree_booted
+
+- name: Query which required host packages are already installed
+  ansible.builtin.command:
+    argv: "{{ ['rpm', '-q', '--qf', '%{NAME} %{ARCH}\\n'] + host_packages }}"
+  register: host_prep_pkg_query
+  changed_when: false
+  failed_when: false
+  when: host_packages | length > 0
+
+- name: Compute missing host packages
+  ansible.builtin.set_fact:
+    host_prep_missing_packages: >-
+      {{ host_prep_pkg_query.stdout_lines
+         | select('search', 'is not installed')
+         | map('regex_replace', '^package (.+) is not installed$', '\1')
+         | list }}
+  when: host_prep_pkg_query is not skipped
+
+- name: Ensure required host packages (dnf host)
+  ansible.builtin.package:
+    name: "{{ host_packages }}"
+    state: present
+  when:
+    - not host_prep_ostree_booted.stat.exists
+    - host_packages | length > 0
+
+- name: Layer missing host packages (rpm-ostree host)
+  ansible.builtin.command:
+    argv: "{{ ['rpm-ostree', 'install', '--apply-live', '--idempotent']
+               + host_prep_missing_packages }}"
+  register: host_prep_ostree_install
+  changed_when:
+    - host_prep_ostree_install is not skipped
+    - "'No changes' not in host_prep_ostree_install.stdout"
+  when:
+    - host_prep_ostree_booted.stat.exists
+    - host_prep_missing_packages | default([]) | length > 0
+    - not ansible_check_mode
+
+- name: Ensure the kubernetes Python library for kubernetes.core modules
+  ansible.builtin.pip:
+    name: "{{ python_kubernetes_package }}"
+    executable: pip3
+    extra_args: "--user"
+
+- name: Host preparation summary
+  ansible.builtin.debug:
+    msg: >-
+      host prep OK — os={{ ansible_facts['distribution'] }},
+      selinux={{ host_prep_selinux_status }},
+      mem={{ host_prep_available_mem_gib | round(0) | int }}G free vs
+      {{ host_prep_required_mem_gib }}G required,
+      vcpu={{ ansible_facts['processor_vcpus'] }} vs {{ host_prep_required_vcpu }} required,
+      disk={{ host_prep_disk_budget_gib }}G budget (free + lab usage) vs {{ host_prep_required_disk_gib }}G required.

@@ -1,0 +1,15 @@
+---
+# Pinned external collection dependencies. Install with:
+#   ansible-galaxy collection install -r requirements.yml -p ansible_collections
+# Installed third-party trees are gitignored; only shanemcd.dr_lab is tracked.
+collections:
+  - name: community.general
+    version: "13.5.0"
+  - name: containers.podman
+    version: "1.21.1"
+  - name: ansible.posix
+    version: "2.2.2"
+  - name: community.crypto
+    version: "3.5.0"
+  - name: kubernetes.core
+    version: "6.6.0"

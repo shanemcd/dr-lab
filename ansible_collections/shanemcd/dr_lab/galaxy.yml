@@ -1,0 +1,24 @@
+---
+namespace: shanemcd
+name: dr_lab
+version: 0.1.0
+readme: README.md
+authors:
+  - Shane McDonald <me@shanemcd.com>
+description: >-
+  Three single-node OpenShift clusters (SNOs) on one libvirt host — the
+  foundation of a disaster-recovery lab: hub, primary, and recovery
+  clusters with per-cluster DNS, networking, and bootstrap-in-place
+  installs on aarch64.
+license:
+  - GPL-3.0-or-later
+tags:
+  - infrastructure
+  - linux
+  - openshift
+  - libvirt
+  - lab
+dependencies: {}
+repository: https://github.com/shanemcd/dr-lab
+documentation: https://github.com/shanemcd/dr-lab
+issues: https://github.com/shanemcd/dr-lab/issues
