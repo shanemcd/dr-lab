@@ -32,5 +32,8 @@ networking:
 fips: {{ cluster_fips | bool | ternary('true', 'false') }}
 {% if install_feature_set | length > 0 %}
 featureSet: {{ install_feature_set }}
-{% endif %}
+# osImageStream is protected by the OSStreams feature gate (4.22 GA):
+# only rendered when a feature set that carries it is explicitly set. The
+# GA payload's default OS stream (rhel-9) matches the pinned live ISO.
 osImageStream: {{ rhcos_stream_name }}
+{% endif %}

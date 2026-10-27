@@ -10,6 +10,11 @@
 # ignition is generated at most once per fresh window: complete + fresh
 # => reuse; stale or partial => fail with teardown guidance.
 
+- name: Gather host facts
+  # Playbooks run with gather_facts: false; this role consumes
+  # ansible_date_time for the ignition fresh-window measure.
+  ansible.builtin.setup:
+
 - name: Stat the install pull secret
   ansible.builtin.stat:
     path: "{{ install_pull_secret_path }}"
