@@ -280,6 +280,15 @@
     executable: pip3
     extra_args: "--user"
 
+- name: Ensure firewalld is enabled and started
+  # The lab network carries an explicit firewalld zone; libvirt refuses to
+  # start a zoned network when firewalld is inactive (Fedora server images
+  # ship it installed but not always enabled).
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+
 - name: Host preparation summary
   ansible.builtin.debug:
     msg: >-
