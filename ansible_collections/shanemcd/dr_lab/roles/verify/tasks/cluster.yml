@@ -117,7 +117,7 @@
   ansible.builtin.assert:
     that:
       - verify_nodes.stdout_lines | length == 1
-      - verify_nodes.stdout_lines[0] is search(' ' ~ cluster_name ~ ' True$')
+      - verify_nodes.stdout_lines[0] is search('^' ~ cluster_name ~ ' True$')
       - verify_ready_count | int == 1
       - verify_clusterversion.stdout_lines | length == 2
       - verify_clusterversion.stdout_lines[0] | trim == ocp_version
