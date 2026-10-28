@@ -69,20 +69,20 @@
   register: acm_sub_result
   changed_when: "'created' in acm_sub_result.stdout"
 
-- name: Wait for the operator CSV to be created
+- name: Wait for the ACM subscription to select its installed CSV
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
       - get
-      - csv
+      - "subscription/{{ acm_package }}"
       - "-n"
       - "{{ acm_namespace }}"
       - "-o"
-      - 'jsonpath={.items[*].metadata.name}'
+      - 'jsonpath={.status.installedCSV}'
   environment:
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
   register: acm_csv_created
-  until: acm_csv_created.stdout | length > 0
+  until: acm_csv_created.rc == 0 and acm_csv_created.stdout | length > 0
   retries: 30
   delay: 10
   changed_when: false
@@ -93,10 +93,9 @@
       - "{{ install_bin_dir }}/oc"
       - wait
       - "--for=jsonpath={.status.phase}=Succeeded"
-      - csv
+      - "csv/{{ acm_csv_created.stdout }}"
       - "-n"
       - "{{ acm_namespace }}"
-      - "--all"
       - "--timeout={{ (acm_csv_timeout_minutes | int) * 60 }}s"
   environment:
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
