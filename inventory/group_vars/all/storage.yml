@@ -1,47 +1,14 @@
 ---
-# Internal compact single-node ODF on the DR spokes (the working ocp-lab
-# design). Each spoke VM gets extra virtio disks: LSO turns them into
-# localblock PVs, and the StorageCluster runs 1 mon + 3 replica-1 OSDs
-# (ocs-operator's single-node pattern: flexibleScaling, monPVCTemplate +
-# storageDeviceSets on localblock, portable false).
-storage_clusters:
-  - dr-primary
-  - dr-recovery
-
-# Extra virtio disks per spoke VM: three land the OSD PVCs via LSO; the
-# mon runs from a hostPath (compact SNO pattern). Equal sizes keep the
-# LocalVolumeSet binding simple.
-storage_disk_size: 100G
-storage_disk_prefix: osd
-
-# Local Storage Operator (LSO): provisions the localblock StorageClass
-# from the raw virtio disks.
+# Three failure domains per managed cluster, one dedicated raw disk per node.
+storage_clusters: [dr-primary, dr-recovery]
 storage_lso_namespace: openshift-local-storage
 storage_lso_channel: stable
-
-# ODF operator + single-node StorageCluster.
 storage_odf_namespace: openshift-storage
 storage_odf_channel: stable-4.22
-storage_cluster_name: sno-storagecluster
-
-# The LSO LocalVolumeSet selects exactly these devices on each spoke
-# (vda is the install disk — never include it).
-storage_local_devices:
-  - /dev/vdb
-  - /dev/vdc
-  - /dev/vdd
-  - /dev/vde
-
-# StorageClass the LocalVolumeSet provisions (whole raw devices, Block
-# volume mode) — consumed by the mon + OSD PVC templates below.
-storage_lso_storageclass: localblock
-
-# Single-node StorageCluster sizing: mon runs from a hostPath
-# (monDataDirHostPath), three replica-1 OSDs on localblock.
-storage_osd_count: 3
+storage_cluster_name: ocs-storagecluster
 storage_odf_operatorgroup: odf-operatorgroup
-
-# LSO discovery window: selects the 100G data disks and nothing else
-# (the 200G install disk vda falls outside).
-storage_lso_min_size: 99Gi
-storage_lso_max_size: 101Gi
+storage_local_devices: [/dev/vdb]
+storage_lso_storageclass: localblock
+# qemu-img 120G is 120 GiB; leave headroom for local PV capacity rounding.
+storage_device_request: 119Gi
+storage_rbd_storageclass: ocs-storagecluster-ceph-rbd

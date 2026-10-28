@@ -1,0 +1,53 @@
+---
+- name: Ensure operator namespace, group and subscription
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, '-f', '-']
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ storage_operator.namespace }}
+        labels:
+          openshift.io/cluster-monitoring: "true"
+      ---
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: {{ storage_operator.name }}
+        namespace: {{ storage_operator.namespace }}
+      spec:
+        targetNamespaces: [{{ storage_operator.namespace }}]
+      ---
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: {{ storage_operator.name }}
+        namespace: {{ storage_operator.namespace }}
+      spec:
+        channel: {{ storage_operator.channel }}
+        installPlanApproval: Automatic
+        name: {{ storage_operator.name }}
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_operator_apply
+  changed_when: "'created' in storage_operator_apply.stdout or 'configured' in storage_operator_apply.stdout"
+
+- name: Wait for the operator deployment including initial OLM creation
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - '-n'
+      - "{{ storage_operator.namespace }}"
+      - "deployment/{{ storage_operator.deployment }}"
+      - '--for=condition=Available'
+      - '--timeout=10s'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_operator_ready
+  until: storage_operator_ready.rc == 0
+  retries: 120
+  delay: 10
+  changed_when: false

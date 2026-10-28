@@ -14,7 +14,7 @@
 - name: Stat the per-cluster kubeconfigs
   ansible.builtin.stat:
     path: "{{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
-  loop: "{{ lab_nodes }}"
+  loop: "{{ clusters }}"
   loop_control:
     label: "{{ item.name }}"
   register: verify_kubeconfig_stat
@@ -25,7 +25,7 @@
       - item.stat.exists
     fail_msg: >-
       No kubeconfig at {{ install_base_dir }}/{{ item.item.name }}/auth/kubeconfig
-      — run 06_vms.yml + 07_install.yml before verification.
+      — run core.yml before verification.
   loop: "{{ verify_kubeconfig_stat.results }}"
   loop_control:
     label: "{{ item.item.name }}"
@@ -55,9 +55,9 @@
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: Verify each SNO cluster
+- name: Verify each cluster
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ lab_nodes }}"
+  loop: "{{ clusters }}"
   loop_control:
     loop_var: sno_node
     label: "{{ sno_node.name }}"
@@ -68,7 +68,7 @@
 - name: Verification summary
   ansible.builtin.debug:
     msg: >-
-      verify OK — {{ lab_nodes | map(attribute='name') | join(', ') }}:
+      verify OK — {{ clusters | map(attribute='name') | join(', ') }}:
       domains running; each cluster node Ready, clusterversion
       Available ({{ ocp_version }}), operators Available, pools Updated;
       evidence at {{ verification_dir }}/{{ verify_evidence_report_name }}

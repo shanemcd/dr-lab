@@ -13,6 +13,6 @@ nodes: {{ c.nodes | join('; ') }}
 clusterversion: desired {{ c.clusterversion[0] }}, Available {{ c.clusterversion[1] }}
 machine config pools: {{ c.mcps | join('; ') }}
 operators Available: {{ c.operators_available }} of {{ c.operators_total }}
-domain state: {{ c.domain_state }}
+domain states: {{ c.domain_states | join(', ') }}
 console: https://console-openshift-console.apps.{{ name }}.{{ base_domain }}
 {% endfor %}

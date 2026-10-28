@@ -1,22 +1,15 @@
 ---
-- name: Assert the storage target clusters are known
+- name: Require known compact storage clusters
   ansible.builtin.assert:
     that:
-      - storage_clusters | length >= 1
-      - storage_clusters | difference(lab_nodes | map(attribute='name') | list) | length == 0
-    fail_msg: >-
-      storage_clusters must name existing clusters; found
-      {{ storage_clusters | default([]) }} vs topology
-      {{ lab_nodes | map(attribute='name') | list }}.
+      - storage_clusters | length == 2
+      - storage_clusters | difference(compact_clusters | map(attribute='name') | list) | length == 0
+      - storage_local_devices == ['/dev/vdb']
+    fail_msg: Storage requires two three-master clusters with dedicated /dev/vdb disks.
 
-- name: Attach the ODF data disks to the spoke VMs
-  ansible.builtin.include_tasks: disks.yml
-  loop: "{{ lab_nodes | selectattr('name', 'in', storage_clusters) | list }}"
-  loop_control:
-    loop_var: storage_node
-
-- name: Layer ODF on the target clusters
+- name: Converge three-node internal ODF on each managed cluster
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ lab_nodes | selectattr('name', 'in', storage_clusters) | list }}"
+  loop: "{{ clusters | selectattr('name', 'in', storage_clusters) | list }}"
   loop_control:
-    loop_var: sno_node
+    loop_var: storage_cluster
+    label: "{{ storage_cluster.name }}"

@@ -6,6 +6,7 @@
 - name: Set per-cluster facts
   ansible.builtin.set_fact:
     cluster_name: "{{ sno_node.name }}"
+    verify_expected_members: "{{ lab_nodes | selectattr('cluster', 'equalto', sno_node.name) | list }}"
     cluster_kubeconfig: "{{ install_base_dir }}/{{ sno_node.name }}/auth/kubeconfig"
 
 - name: Wait for the cluster to settle
@@ -116,9 +117,11 @@
                                     | select('search', ' True$') | list | length }}"
   ansible.builtin.assert:
     that:
-      - verify_nodes.stdout_lines | length == 1
-      - verify_nodes.stdout_lines[0] is search('^' ~ cluster_name ~ ' True$')
-      - verify_ready_count | int == 1
+      - verify_nodes.stdout_lines | length == verify_expected_members | length
+      - >-
+        verify_nodes.stdout_lines | map('regex_replace', ' True$', '') | sort
+        == verify_expected_members | map(attribute='name') | sort
+      - verify_ready_count | int == verify_expected_members | length
       - verify_clusterversion.stdout_lines | length == 2
       - verify_clusterversion.stdout_lines[0] | trim == ocp_version
       - verify_clusterversion.stdout_lines[1] | trim == 'True'
@@ -147,6 +150,6 @@
               'mcps': verify_mcps.stdout_lines,
               'operators_available': verify_operators.stdout_lines | select('search', ' True$') | list | length,
               'operators_total': verify_operators.stdout_lines | list | length,
-              'domain_state': (verify_domain_state.results
-                               | selectattr('item.name', 'equalto', cluster_name)
-                               | map(attribute='stdout') | list | first | default('') | trim) }}) }}
+              'domain_states': (verify_domain_state.results
+                                | selectattr('item.cluster', 'equalto', cluster_name)
+                                | map(attribute='stdout') | list) }}) }}

@@ -1,0 +1,44 @@
+---
+- name: Ensure storage smoke test namespace and PVC
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, '-f', '-']
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: dr-storage-smoke
+      ---
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: rbd-provisioning-test
+        namespace: dr-storage-smoke
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ storage_rbd_storageclass }}
+        volumeMode: Block
+        resources:
+          requests:
+            storage: 1Gi
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_smoke_apply
+  changed_when: "'created' in storage_smoke_apply.stdout or 'configured' in storage_smoke_apply.stdout"
+
+- name: Wait for dynamically provisioned RBD PVC to bind
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - pvc/rbd-provisioning-test
+      - '-n'
+      - dr-storage-smoke
+      - '-o'
+      - 'jsonpath={.status.phase}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_smoke_bound
+  until: storage_smoke_bound.rc == 0 and storage_smoke_bound.stdout == 'Bound'
+  retries: 60
+  delay: 10
+  changed_when: false

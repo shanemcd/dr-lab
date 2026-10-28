@@ -1,338 +1,162 @@
 ---
-# Per-cluster compact single-node ODF install (the working ocp-lab
-# design): LSO turns the extra virtio disks into localblock PVs, then the
-# odf-operator StorageCluster runs 1 mon + 3 replica-1 OSDs with
-# flexibleScaling. Deliberately `oc` and not kubernetes.core.k8s (same
-# convention as cluster_install): the k8s action plugin reads the
-# kubeconfig on the controller as the invoking user, and the per-cluster
-# kubeconfigs are root-owned 0600.
-
-- name: Set per-cluster facts
+- name: Select cluster credentials and storage members
   ansible.builtin.set_fact:
-    cluster_name: "{{ sno_node.name }}"
-    cluster_kubeconfig: "{{ install_base_dir }}/{{ sno_node.name }}/auth/kubeconfig"
+    cluster_kubeconfig: "{{ install_base_dir }}/{{ storage_cluster.name }}/auth/kubeconfig"
+    storage_members: "{{ lab_nodes | selectattr('cluster', 'equalto', storage_cluster.name) | list }}"
 
-- name: Ensure the Local Storage Operator namespace
-  ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
-    stdin: |
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: {{ storage_lso_namespace }}
-        labels:
-          openshift.io/cluster-monitoring: "true"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_lso_ns
-  changed_when: "'created' in storage_lso_ns.stdout"
+- name: Require three independent storage nodes
+  ansible.builtin.assert:
+    that:
+      - storage_members | length == 3
+      - storage_members | map(attribute='name') | unique | length == 3
 
-- name: Ensure the Local Storage OperatorGroup and Subscription
-  ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
-    stdin: |
-      apiVersion: operators.coreos.com/v1
-      kind: OperatorGroup
-      metadata:
-        name: {{ storage_lso_namespace }}
-        namespace: {{ storage_lso_namespace }}
-      spec:
-        targetNamespaces:
-          - {{ storage_lso_namespace }}
-      ---
-      apiVersion: operators.coreos.com/v1alpha1
-      kind: Subscription
-      metadata:
-        name: local-storage-operator
-        namespace: {{ storage_lso_namespace }}
-      spec:
-        channel: {{ storage_lso_channel }}
-        installPlanApproval: Automatic
-        name: local-storage-operator
-        source: redhat-operators
-        sourceNamespace: openshift-marketplace
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_lso_sub
-  changed_when: "'created' in storage_lso_sub.stdout"
-
-- name: Wait for the Local Storage Operator deployment
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - wait
-      - -n
-      - "{{ storage_lso_namespace }}"
-      - deployment/local-storage-operator
-      - --for=condition=Available
-      - --timeout=600s
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  changed_when: false
-
-- name: Ensure the LocalVolumeSet over the ODF data disks
-  ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
-    stdin: |
-      apiVersion: local.storage.openshift.io/v1alpha1
-      kind: LocalVolumeSet
-      metadata:
-        name: odf-localvolumeset
-        namespace: {{ storage_lso_namespace }}
-      spec:
-        # LSO 4.22 discovery: deviceInclusionSpec + maxDeviceCount. The
-        # data disks are selected by size — the 200G install disk (vda)
-        # falls outside the window and is never picked up.
-        deviceInclusionSpec:
-          deviceTypes:
-            - disk
-          minSize: {{ storage_lso_min_size }}
-          maxSize: {{ storage_lso_max_size }}
-        maxDeviceCount: {{ storage_local_devices | length }}
-        nodeSelector:
-          nodeSelectorTerms:
-            - matchExpressions:
-                - key: kubernetes.io/hostname
-                  operator: In
-                  values:
-                    - {{ sno_node.name }}
-        storageClassName: {{ storage_lso_storageclass }}
-        volumeMode: Block
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_lvs
-  changed_when: "'created' in storage_lvs.stdout or 'configured' in storage_lvs.stdout"
-
-- name: Wait for the localblock PVs
-  # PVs carry the LocalVolumeSet owner labels, not a storageclass label,
-  # and expose phase rather than conditions.
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - wait
-      - pv
-      - "-l"
-      - storage.openshift.com/owner-name=odf-localvolumeset,kubernetes.io/hostname={{ sno_node.name }}
-      - "--for=jsonpath={.status.phase}=Available"
-      - --timeout=600s
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  changed_when: false
-
-- name: Ensure the ODF namespace
-  ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
-    stdin: |
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: {{ storage_odf_namespace }}
-        labels:
-          openshift.io/cluster-monitoring: "true"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_odf_ns
-  changed_when: "'created' in storage_odf_ns.stdout"
-
-- name: Ensure the ODF OperatorGroup and Subscription
-  ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
-    stdin: |
-      apiVersion: operators.coreos.com/v1
-      kind: OperatorGroup
-      metadata:
-        name: {{ storage_odf_operatorgroup }}
-        namespace: {{ storage_odf_namespace }}
-      spec:
-        targetNamespaces:
-          - {{ storage_odf_namespace }}
-      ---
-      apiVersion: operators.coreos.com/v1alpha1
-      kind: Subscription
-      metadata:
-        name: odf-operator
-        namespace: {{ storage_odf_namespace }}
-      spec:
-        channel: {{ storage_odf_channel }}
-        installPlanApproval: Automatic
-        name: odf-operator
-        source: redhat-operators
-        sourceNamespace: openshift-marketplace
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_odf_sub
-  changed_when: "'created' in storage_odf_sub.stdout"
-
-- name: Wait for the ODF operator deployments
-  # The deployment only exists once OLM has rolled the CSV out, so an
-  # early NotFound is retried rather than fatal.
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - wait
-      - -n
-      - "{{ storage_odf_namespace }}"
-      - deployment/ocs-operator
-      - --for=condition=Available
-      - --timeout=1200s
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_ocs_wait
-  until: storage_ocs_wait.rc == 0
-  retries: 60
-  delay: 20
-  changed_when: false
-
-- name: Enable the ocs-operator single-node mode (CSV)
-  # SINGLE_NODE=true drops the 3-node minimum in the topology reconcile
-  # (ocs-operator pkg/util/k8sutil.go SingleNodeEnvVar). OLM reverts direct
-  # deployment edits, so the env must be injected into the CSV — OLM then
-  # reconciles the deployment with it. Re-applied after every operator
-  # upgrade. Idempotent: only adds the env entry when missing.
-  ansible.builtin.shell: |
-    set -o pipefail
-    if {{ install_bin_dir }}/oc -n {{ storage_odf_namespace }} get deploy ocs-operator \
-        -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SINGLE_NODE")].value}' | grep -q true; then
-      exit 0  # already set on the deployment (and therefore the CSV)
-    fi
-    CSV=$({{ install_bin_dir }}/oc -n {{ storage_odf_namespace }} get csv -o name | grep ocs-operator | head -1)
-    {{ install_bin_dir }}/oc -n {{ storage_odf_namespace }} patch "$CSV" --type=json \
-      -p '[{"op":"add","path":"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-","value":{"name":"SINGLE_NODE","value":"true"}}]'
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_single_node_csv
-  changed_when: "'patched' in storage_single_node_csv.stdout"
-
-- name: Wait for the ocs-operator rollout
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - rollout
-      - status
-      - -n
-      - "{{ storage_odf_namespace }}"
-      - deployment/ocs-operator
-      - --timeout=300s
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  changed_when: false
-
-- name: Label the node for ODF placement
+- name: Label storage nodes for ODF placement
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
       - label
       - node
-      - "{{ sno_node.name }}"
-      - cluster.ocs.openshift.io/openshift-storage=
-      - --overwrite
+      - "{{ item.name }}"
+      - 'cluster.ocs.openshift.io/openshift-storage='
+      - '--overwrite'
+  loop: "{{ storage_members }}"
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_nodelabel
-  changed_when: "'labeled' in storage_nodelabel.stdout or 'labeled' in storage_nodelabel.stderr"
+  register: storage_node_label
+  changed_when: "'not labeled' not in storage_node_label.stdout"
 
-- name: Ensure the compact single-node StorageCluster
+- name: Install LSO and ODF through supported subscriptions
+  ansible.builtin.include_tasks: operator.yml
+  loop:
+    - name: local-storage-operator
+      namespace: "{{ storage_lso_namespace }}"
+      channel: "{{ storage_lso_channel }}"
+      deployment: local-storage-operator
+    - name: odf-operator
+      namespace: "{{ storage_odf_namespace }}"
+      channel: "{{ storage_odf_channel }}"
+      deployment: ocs-operator
+  loop_control:
+    loop_var: storage_operator
+    label: "{{ storage_operator.name }}"
+
+- name: Create local block volumes only on the dedicated data disks
   ansible.builtin.command:
-    argv: ["{{ install_bin_dir }}/oc", apply, "-f", "-"]
+    argv: ["{{ install_bin_dir }}/oc", apply, '-f', '-']
+    stdin: |
+      apiVersion: local.storage.openshift.io/v1
+      kind: LocalVolume
+      metadata:
+        name: odf-local-disks
+        namespace: {{ storage_lso_namespace }}
+      spec:
+        nodeSelector:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values: {{ storage_members | map(attribute='name') | list | to_json }}
+        storageClassDevices:
+          - storageClassName: {{ storage_lso_storageclass }}
+            volumeMode: Block
+            devicePaths: {{ storage_local_devices | to_json }}
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_local_apply
+  changed_when: "'created' in storage_local_apply.stdout or 'configured' in storage_local_apply.stdout"
+
+- name: Require one local block PV per selected node
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ install_bin_dir }}/oc get pv -o json | python3 -c '
+    import json, sys
+    pvs = [p for p in json.load(sys.stdin)["items"]
+           if p["spec"].get("storageClassName") == {{ storage_lso_storageclass | to_json }}
+           and p["status"]["phase"] in ("Available", "Bound")]
+    assert len(pvs) == 3, "Expected exactly three usable localblock PVs"
+    hosts = set()
+    for pv in pvs:
+        for term in pv["spec"]["nodeAffinity"]["required"]["nodeSelectorTerms"]:
+            for expr in term.get("matchExpressions", []):
+                if expr["key"] == "kubernetes.io/hostname" and expr["operator"] == "In":
+                    hosts.update(expr["values"])
+    assert hosts == set({{ storage_members | map(attribute='name') | list | to_json }}), hosts
+    '
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_pvs_ready
+  until: storage_pvs_ready.rc == 0
+  retries: 120
+  delay: 10
+  changed_when: false
+
+- name: Create standard three-node internal StorageCluster
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, '-f', '-']
     stdin: |
       apiVersion: ocs.openshift.io/v1
       kind: StorageCluster
       metadata:
         name: {{ storage_cluster_name }}
         namespace: {{ storage_odf_namespace }}
-        annotations:
-          # Skips the 3-node topology requirement — the documented
-          # single-node/local-dev ODF pattern.
-          cluster.ocs.openshift.io/local-devices: "true"
-          uninstall.ocs.openshift.io/cleanup-policy: delete
-          uninstall.ocs.openshift.io/mode: graceful
       spec:
-        # SNO pattern (per the working ocp-lab design): the mon runs from
-        # a hostPath instead of a PVC — monPVCTemplate would force 3-node
-        # mon placement ("not enough nodes found: expected 3, found 1").
-        monDataDirHostPath: /var/lib/rook
         manageNodes: false
-        # Lean sizing for the resource-constrained SNO lab — ODF defaults
-        # (osd 2cpu/5Gi, mon 1cpu/2Gi) overrun a single compact node.
-        resources:
-          mon:
-            requests:
-              cpu: 500m
-              memory: 1Gi
-          mgr:
-            requests:
-              cpu: 500m
-              memory: 1Gi
+        monDataDirHostPath: /var/lib/rook
         storageDeviceSets:
-          - name: osd
-            count: {{ storage_osd_count }}
-            replica: 1
+          - name: ocs-deviceset
+            count: 1
+            replica: 3
             portable: false
-            resources:
-              requests:
-                cpu: 500m
-                memory: 2Gi
             dataPVCTemplate:
               spec:
-                accessModes:
-                  - ReadWriteOnce
                 storageClassName: {{ storage_lso_storageclass }}
+                accessModes: [ReadWriteOnce]
                 volumeMode: Block
                 resources:
                   requests:
-                    storage: {{ storage_disk_size }}
-        flexibleScaling: true
-        # NooBaa/MCG is not needed for RBD DR — skip it entirely.
-        multiCloudGateway:
-          reconcileStrategy: ignore
+                    storage: {{ storage_device_request }}
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_sc
-  changed_when: "'created' in storage_sc.stdout or 'configured' in storage_sc.stdout"
+  register: storage_sc_apply
+  changed_when: "'created' in storage_sc_apply.stdout or 'configured' in storage_sc_apply.stdout"
 
-- name: Force failureDomain host on the StorageCluster status
-  # Released ocs-operator 4.22 maps the SINGLE_NODE failure domain "osd" to
-  # an empty topology key (the "osd"->hostname mapping is master-only), which
-  # makes the rook version-detect job invalid (empty TSC topologyKey). Patch
-  # the status to "host" — setFailureDomain keeps a pre-set domain. Idempotent.
-  ansible.builtin.shell: |
-    set -o pipefail
-    FD=$({{ install_bin_dir }}/oc -n {{ storage_odf_namespace }} get storagecluster {{ storage_cluster_name }} -o jsonpath='{.status.failureDomain}')
-    if [ "$FD" = "host" ]; then exit 0; fi
-    {{ install_bin_dir }}/oc -n {{ storage_odf_namespace }} patch storagecluster {{ storage_cluster_name }} --subresource=status --type merge -p '{"status":{"failureDomain":"host"}}'
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_fd_patch
-  changed_when: "'patched' in storage_fd_patch.stdout"
-
-- name: Wait for the StorageCluster to become Available
+- name: Wait for StorageCluster readiness
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
-      - wait
-      - -n
+      - get
+      - storagecluster
+      - "{{ storage_cluster_name }}"
+      - '-n'
       - "{{ storage_odf_namespace }}"
-      - storagecluster/{{ storage_cluster_name }}
-      - --for=condition=Available
-      - --timeout=3600s
+      - '-o'
+      - 'jsonpath={.status.phase}'
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_sc_ready
+  until: storage_sc_ready.rc == 0 and storage_sc_ready.stdout == 'Ready'
+  retries: 240
+  delay: 10
   changed_when: false
 
-- name: Wait for the CephCluster to be Ready with HEALTH_OK
+- name: Require Ceph health OK
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
-      - "-n"
-      - "{{ storage_odf_namespace }}"
       - get
       - cephcluster
-      - "-o"
-      - jsonpath={.items[0].status.phase}
+      - "{{ storage_cluster_name }}-cephcluster"
+      - '-n'
+      - "{{ storage_odf_namespace }}"
+      - '-o'
+      - 'jsonpath={.status.ceph.health}'
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: storage_ceph_phase
-  until: storage_ceph_phase.stdout == "Ready"
+  register: storage_ceph_health
+  until: storage_ceph_health.rc == 0 and storage_ceph_health.stdout == 'HEALTH_OK'
   retries: 120
-  delay: 30
+  delay: 10
   changed_when: false
+
+- name: Verify dynamically provisioned RBD PVC
+  ansible.builtin.include_tasks: smoke.yml
