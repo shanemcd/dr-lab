@@ -198,7 +198,6 @@
     that:
       - install_config_metadata.infraID is search('^' ~ cluster_name)
       - install_config_pull_secret_stat.stat.mode == '0600'
-      # the wrapper embeds the master pointer config + install unit
       - "'coreos-installer' in (install_config_wrapper_raw.content | b64decode)"
       - "'/opt/dr-lab/master.ign' in (install_config_wrapper_raw.content | b64decode)"
   fail_msg: >-
