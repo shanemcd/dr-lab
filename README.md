@@ -35,6 +35,23 @@ Its cleanup and filesystem-security findings are documented, not counted as a
 running-VM failover pass. No production-support claim is made for this nested
 ARM64 lab.
 
+## Hub storage / DR console
+
+The prerequisites stage enables `odf-multicluster-console` while preserving
+existing console plugins. After refreshing the hub console, use **Fleet
+Management → Data Services → Disaster recovery**, or open
+`/multicloud/data-services/disaster-recovery` on the hub console.
+To reconcile only this setting on an existing lab:
+
+```bash
+ansible-playbook shanemcd.dr_lab.11_dr_prerequisites --tags dr-console
+```
+
+The plugin's **Storage system** navigation additionally requires ACM Observability
+and administrator access. This lab does not currently instantiate a
+`MultiClusterObservability` resource or its metrics backend; enabling the console
+plugin alone does not supply the storage topology/metrics view.
+
 ## License and provenance
 
 [GPL-3.0-or-later](LICENSE). The collection follows conventions ported from

@@ -1,0 +1,93 @@
+---
+- name: Wait for the ODF multicluster console plugin registration
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - consoleplugin
+      - odf-multicluster-console
+      - --request-timeout=20s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: dr_console_plugin
+  until: dr_console_plugin.rc == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Wait for the ODF multicluster console backend
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - rollout
+      - status
+      - deployment/odf-multicluster-console
+      - -n
+      - openshift-operators
+      - --timeout=120s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  changed_when: false
+
+- name: Read the hub console configuration before enabling its DR view
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - console.operator.openshift.io
+      - cluster
+      - -o
+      - json
+      - --request-timeout=20s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: dr_console_config
+  changed_when: false
+
+# Preserve all existing plugins. The resourceVersion test refuses to overwrite
+# a concurrent administrator/operator change; rerun after a conflict.
+- name: Enable the ODF multicluster plugin without replacing unrelated plugins
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - patch
+      - console.operator.openshift.io
+      - cluster
+      - --type=json
+      - --request-timeout=20s
+      - -p
+      - "{{ dr_console_patch | to_json }}"
+  vars:
+    dr_console_current: "{{ dr_console_config.stdout | from_json }}"
+    dr_console_plugins: "{{ dr_console_current.spec.plugins | default([]) }}"
+    dr_console_patch:
+      - op: test
+        path: /metadata/resourceVersion
+        value: "{{ dr_console_current.metadata.resourceVersion }}"
+      - op: add
+        path: /spec/plugins
+        value: "{{ (dr_console_plugins | list) + ['odf-multicluster-console'] }}"
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  when: "'odf-multicluster-console' not in dr_console_plugins"
+  changed_when: true
+
+- name: Verify the ODF multicluster plugin is enabled
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - console.operator.openshift.io
+      - cluster
+      - -o
+      - json
+      - --request-timeout=20s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: dr_console_enabled
+  until: >-
+    dr_console_enabled.rc == 0 and
+    'odf-multicluster-console' in ((dr_console_enabled.stdout | from_json).spec.plugins | default([]))
+  retries: 12
+  delay: 5
+  changed_when: false

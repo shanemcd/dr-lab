@@ -24,6 +24,10 @@
     dr_operator_package: "{{ dr_orchestrator_package }}"
     dr_operator_channel: "{{ dr_orchestrator_channel }}"
 
+- name: Enable the storage and DR console view on the hub
+  ansible.builtin.import_tasks: console.yml
+  tags: dr-console
+
 - name: Require Regional-DR hub APIs from the orchestrator dependencies
   ansible.builtin.command:
     argv:
