@@ -23,6 +23,14 @@ checks. It must complete all infrastructure and add-on stages plus verification
 without manual recovery before a one-shot infrastructure pass can be recorded.
 No successful rebuild is claimed while it is active.
 
+At 05:56 UTC (iteration 27), all seven steady nodes are Ready. The hub installer
+completion and membership/schedulability gates passed. The primary installer
+confirmed bootstrap completion, and the source role switched its load balancer
+and removed that temporary domain with UUID guards. The run is waiting for
+primary install completion; recovery bootstrap cleanup and all add-on stages
+remain ahead. No manual cluster repair, stage restart, or operator patch was
+applied. Hub disk-boot NTP was observed at Stratum 4 / Leap Normal.
+
 Host-local logs (may contain credentials; retain privately):
 - `/tmp/dr-full-teardown-26.log`, exit marker `/tmp/dr-full-teardown-26.rc` = 0.
 - `/tmp/dr-full-site-26.log`, exit marker `/tmp/dr-full-site-26.rc` when finished.
