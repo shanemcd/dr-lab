@@ -43,6 +43,15 @@ No deployment restart, manual operator repair, or stage skipping was performed.
 These are intermediate results, not a successful full-site recap or VM execution
 claim; Ceph's vendor-default authentication caveats still apply.
 
+At 07:00 UTC (iteration 29), both sites passed StorageCluster readiness,
+Ceph health, dynamic RBD PVC binding, NooBaa readiness, and dynamic bucket checks.
+The same uninterrupted run also passed Submariner connection checks, independent
+cross-site PodIP/ClusterIP HTTP probes, and authenticated remote S3 exchange with
+verified TLS. It has advanced through CA-trust setup and GitOps installation on
+all three clusters to OADP prerequisites. Regional DR and final verification are
+still pending; the site process remains active with no terminal recap. No manual
+operator intervention or deployment retry was applied.
+
 Host-local logs (may contain credentials; retain privately):
 - `/tmp/dr-full-teardown-26.log`, exit marker `/tmp/dr-full-teardown-26.rc` = 0.
 - `/tmp/dr-full-site-26.log`, exit marker `/tmp/dr-full-site-26.rc` when finished.
