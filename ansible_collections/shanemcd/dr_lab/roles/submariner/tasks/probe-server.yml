@@ -1,0 +1,82 @@
+---
+- name: Select a non-gateway node for the application probe
+  ansible.builtin.set_fact:
+    submariner_probe_node: "{{ (lab_nodes | selectattr('cluster', 'equalto', submariner_probe_site) | list)[1].name }}"
+
+- name: Deploy a restricted application endpoint on the non-gateway node
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: dr-transport-smoke
+      ---
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: overlay-endpoint
+        namespace: dr-transport-smoke
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: overlay-endpoint}
+        template:
+          metadata:
+            labels: {app: overlay-endpoint}
+          spec:
+            hostNetwork: false
+            automountServiceAccountToken: false
+            nodeSelector:
+              kubernetes.io/hostname: {{ submariner_probe_node }}
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: endpoint
+                image: {{ submariner_probe_image }}
+                command: [python3, '-u', '-c']
+                args:
+                  - |
+                    import http.server
+                    class Handler(http.server.BaseHTTPRequestHandler):
+                        def do_GET(self):
+                            self.send_response(200)
+                            self.end_headers()
+                            self.wfile.write(b'dr-lab-overlay:{{ submariner_probe_site }}')
+                    http.server.HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities: {drop: [ALL]}
+                resources:
+                  requests: {cpu: 20m, memory: 64Mi}
+                  limits: {memory: 128Mi}
+                readinessProbe:
+                  httpGet: {path: /, port: 8080}
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: overlay-endpoint
+        namespace: dr-transport-smoke
+      spec:
+        selector: {app: overlay-endpoint}
+        ports: [{port: 8080, targetPort: 8080}]
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_site }}/auth/kubeconfig"
+  register: submariner_probe_apply
+  changed_when: "'created' in submariner_probe_apply.stdout or 'configured' in submariner_probe_apply.stdout"
+
+- name: Wait for the unprivileged application endpoint
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - rollout
+      - status
+      - deployment/overlay-endpoint
+      - -n
+      - dr-transport-smoke
+      - --timeout=300s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_site }}/auth/kubeconfig"
+  changed_when: false

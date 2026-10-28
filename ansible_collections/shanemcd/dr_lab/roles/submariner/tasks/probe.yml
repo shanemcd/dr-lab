@@ -1,0 +1,12 @@
+---
+- name: Deploy application probes at both sites
+  ansible.builtin.include_tasks: probe-server.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: submariner_probe_site
+
+- name: Require bidirectional application traffic over the overlay
+  ansible.builtin.include_tasks: probe-client.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: submariner_probe_site

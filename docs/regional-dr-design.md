@@ -28,6 +28,46 @@ https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for
 
 /root/ocp-lab/docs/odf-ramendr-acm-discovered-vm-setup.md records a working x86 lab with MirrorPeer, DRPolicy, Submariner, OADP and vm-recipe. Its SINGLE_NODE storage tweaks are deliberately NOT carried over. /root/ocp-lab/manifests/acm-vm-dr contains workload/DRPC examples to adapt after infrastructure validation. Never commit the old lab's credentials or copy its kubeconfigs.
 
+## Live transport and policy implementation (2026-10-28)
+
+Stage10 now also runs a real application probe, not only add-on conditions.
+Unprivileged Python HTTP servers run on each site's **second master**, not the
+first-master gateways, with hostNetwork false and no service-account token.
+From each endpoint pod, urllib (explicitly bypassing HTTP proxies) fetches both
+the other site's PodIP and ClusterIP and asserts the remote site identity.
+Both directions passed. Standalone rerun: `playbooks/probe_overlay.yml` inside
+the collection. The ARM64 Python image is digest-pinned after runtime validation.
+A rollout exposed old terminating pods in the selector; probe selection now
+excludes them rather than weakening endpoint uniqueness. Four successful HTTP
+exchanges establish application traffic over the overlay, not just a tunnel.
+An additional probe now uses those same restricted pods to perform authenticated
+S3 PUT/GET/content-compare/DELETE against the other site's actual S3 route.
+It uses the issued lab-only OBC credentials, AWS SigV4, an explicitly trusted
+remote ingress signer, hostname verification, no HTTP proxy and no insecure TLS
+option. Credentials reach the pod through `oc exec` stdin, with Ansible no_log;
+no credential is placed in the oc/Python process arguments, source control or
+persistent probe files. Ansible's normal root-owned module transport may use
+temporary files according to connection settings; this is not a zero-disk or
+memory-only secret-transport claim.
+Both directions passed live. S3 route traffic proves authenticated remote object
+I/O with verified TLS (via ingress), **not** S3 over the PodIP overlay.
+The separate PodIP/ClusterIP HTTP probe proves that overlay. Neither alone
+establishes replicated VM data or completed failover.
+
+For stage12 we inspected the **deployed** odf-multicluster-console source map,
+`exposed-createDataPolicy-chunk.js.map`, module
+`packages/mco/components/create-dr-policy/utils/k8s-utils.ts`, from image
+`registry.redhat.io/odf4/odf-multicluster-console-rhel9@sha256:4685579864d3b0cd0c727c97fae7bc1838920dce59a0d65986e46253ee9f9873`.
+Its DataFoundation branch creates a MirrorPeer with manageS3 true, type async,
+and two storageClusterRef entries, then creates DRPolicy with drClusters,
+schedulingInterval and replicationClassSelector (empty unless clone flattening
+is requested). It does **not** manually create DRClusters or copy S3 credentials;
+those are owned by orchestration. Stage12 reproduces that payload, refuses
+changes to existing identity/spec fields, and waits for typed Validated conditions,
+DR-cluster operator rollout and StorageClusterPeer Peered on both sites.
+This is implementation evidence, not a claim that policy/mirroring/failover
+already passed; actual policy validation remains in progress.
+
 ## Live catalog discovery (2026-10-27)
 
 Read-only discovery against the rebuilt dr-recovery API returned 635 package manifests.
@@ -81,7 +121,7 @@ These are requirements extracted from the guide, not claims of live completion.
 
 - Establish actual operator resolution and runtime compatibility on ARM64; the catalog names/channels above are discovered, not installed.
 - Managed Submariner automation is implemented in stage10: cluster-set broker without Globalnet, explicit first-master gateway, SubmarinerConfig and ManagedClusterAddOn per site, then gateway/agent/connection conditions. Runtime CRD/behavior and an end-to-end cross-overlay probe remain unverified. The default NAT/cable-driver behavior is retained rather than guessing unverified CRD fields.
-- API procedure source: https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.17/pdf/networking/uninstalling-submariner-manually (Networking section1.4.21). Deprecated installNamespace is deliberately omitted. Default gateway selection is overridden by labeling the designated compact master before enabling the add-on.
+- API procedure source: https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.17/pdf/networking/uninstalling-submariner-manually (Networking section1.4.21). Live deployment required the documented deprecated installNamespace: submariner-operator; omitting it sent OLM to the generic add-on namespace. Source now sets it and the add-on framework migrates it to status.namespace. Default gateway selection is overridden by labeling the designated compact master before enabling the add-on.
 - Stage11_dr_prerequisites implements GitOps subscriptions on all three clusters, followed by the hub orchestrator subscription. It validates configured channels against the live redhat-operators catalog, waits for each subscription's specific installed CSV (not arbitrary namespace CSVs), then requires the hub DR CRDs and ramen-hub-operator rollout. GitOps latest and orchestrator stable-4.22 exist in the rebuilt site's live catalog; installation and runtime compatibility have NOT been established.
 - Stage11 also implements section4.7 cross-cluster ingress CA trust before installing operators. It preserves existing custom proxy CA certificates, checks ownership of its ConfigMap, de-duplicates PEM blocks, and changes only proxy.spec.trustedCA. Offline tests exercise actual Ansible union/rendering twice, including custom trust preservation. Live trust propagation and S3 TLS connectivity are still unverified; applying trust may trigger Machine Config Operator reconciliation.
 - Stage11 now installs OADP on both sites BEFORE orchestrator/DR configuration, following section4.16.1 (OADP >=1.4 required). Late OADP installation otherwise requires restarting DR-cluster operators for CRD discovery. Subscription and CSV waits support a selected namespace; GitOps/orchestrator keep openshift-operators, OADP uses openshift-adp with a namespace-scoped OperatorGroup. Existing conflicting groups are refused. The stable channel exists in the rebuilt site's live catalog and advertises OADP 1.6.1; successful installation and ARM64 operand compatibility remain to be verified.

@@ -1,0 +1,72 @@
+---
+- name: Read only the remote smoke bucket's issued credentials
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - configmap/object-provisioning-test
+      - secret/object-provisioning-test
+      - -n
+      - dr-storage-smoke
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_remote }}/auth/kubeconfig"
+  register: submariner_probe_bucket
+  changed_when: false
+  no_log: true
+
+- name: Read the remote ingress signer certificate only, not its private key
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - secret/router-ca
+      - -n
+      - openshift-ingress-operator
+      - -o
+      - 'jsonpath={.data.tls\.crt}'
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_remote }}/auth/kubeconfig"
+  register: submariner_probe_s3_ca
+  changed_when: false
+
+- name: Discover the real remote S3 route hostname
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, route/s3, -n, "{{ storage_odf_namespace }}", -o, 'jsonpath={.spec.host}']
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_remote }}/auth/kubeconfig"
+  register: submariner_probe_s3_host
+  changed_when: false
+
+- name: Exchange real S3 data from a restricted pod on the other site using verified TLS
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - exec
+      - -i
+      - -n
+      - dr-transport-smoke
+      - deployment/overlay-endpoint
+      - --
+      - python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path ~ '/files/s3-probe.py') }}"
+    stdin: >-
+      {{ {'secret': ((submariner_probe_bucket.stdout | from_json)['items']
+      | selectattr('kind', 'equalto', 'Secret') | first).data,
+      'config': ((submariner_probe_bucket.stdout | from_json)['items']
+      | selectattr('kind', 'equalto', 'ConfigMap') | first).data,
+      'host': submariner_probe_s3_host.stdout, 'ca': submariner_probe_s3_ca.stdout} | to_json }}
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_site }}/auth/kubeconfig"
+  register: submariner_probe_s3_result
+  until: submariner_probe_s3_result.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+  no_log: true
+
+- name: Report successful cross-site authenticated S3 transaction without credentials
+  ansible.builtin.debug:
+    msg: "{{ submariner_probe_site }} -> {{ submariner_probe_remote }}: verified TLS S3 PUT/GET/DELETE passed"

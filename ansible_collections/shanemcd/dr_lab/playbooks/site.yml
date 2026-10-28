@@ -14,5 +14,7 @@
   import_playbook: 10_submariner.yml
 - name: Regional-DR operator prerequisites
   import_playbook: 11_dr_prerequisites.yml
+- name: Regional-DR managed peering and policy
+  import_playbook: 12_regional_dr.yml
 - name: Verification stage
   import_playbook: verify.yml

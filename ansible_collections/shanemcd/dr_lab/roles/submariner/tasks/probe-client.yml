@@ -1,0 +1,75 @@
+---
+- name: Select the remote site
+  ansible.builtin.set_fact:
+    submariner_probe_remote: "{{ acm_spokes | reject('equalto', submariner_probe_site) | first }}"
+
+- name: Read the remote endpoint pod
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, pods, -n, dr-transport-smoke, -l, app=overlay-endpoint, -o, json]
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_remote }}/auth/kubeconfig"
+  register: submariner_probe_remote_pod
+  changed_when: false
+
+- name: Exclude terminating pods retained briefly after an endpoint rollout
+  ansible.builtin.set_fact:
+    submariner_probe_remote_pods: >-
+      {{ (submariner_probe_remote_pod.stdout | from_json)['items']
+      | rejectattr('metadata.deletionTimestamp', 'defined') | list }}
+
+- name: Read the remote service
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, service, overlay-endpoint, -n, dr-transport-smoke, -o, json]
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_remote }}/auth/kubeconfig"
+  register: submariner_probe_remote_service
+  changed_when: false
+
+- name: Require a unique non-hostNetwork remote endpoint on a non-gateway node
+  ansible.builtin.assert:
+    that:
+      - submariner_probe_remote_pods | length == 1
+      - not submariner_probe_remote_pods[0].spec.hostNetwork | default(false)
+      - >-
+        submariner_probe_remote_pods[0].spec.nodeName ==
+        (lab_nodes | selectattr('cluster', 'equalto', submariner_probe_remote) | list)[1].name
+
+- name: Exchange application data across remote pod and service networks
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - exec
+      - -n
+      - dr-transport-smoke
+      - deployment/overlay-endpoint
+      - --
+      - python3
+      - -c
+      - |
+        import sys, urllib.request
+        # Explicitly bypass HTTP proxies: this must be direct overlay traffic.
+        client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        expected = ('dr-lab-overlay:' + sys.argv[1]).encode()
+        for address in sys.argv[2:]:
+            url = 'http://' + address + ':8080/'
+            with client.open(url, timeout=10) as response:
+                actual = response.read()
+            assert actual == expected, (url, actual)
+            print('PASS', url, actual.decode())
+      - "{{ submariner_probe_remote }}"
+      - "{{ submariner_probe_remote_pods[0].status.podIP }}"
+      - "{{ (submariner_probe_remote_service.stdout | from_json).spec.clusterIP }}"
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_probe_site }}/auth/kubeconfig"
+  register: submariner_probe_traffic
+  until: submariner_probe_traffic.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Report direct application overlay evidence
+  ansible.builtin.debug:
+    msg: "{{ submariner_probe_site }} -> {{ submariner_probe_remote }}: {{ submariner_probe_traffic.stdout_lines }}"
+
+- name: Verify remote object data with real credentials and verified TLS
+  ansible.builtin.include_tasks: probe-s3.yml

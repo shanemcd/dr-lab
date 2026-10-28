@@ -1,0 +1,12 @@
+---
+- name: Verify application traffic over the deployed regional DR overlay
+  hosts: all
+  become: true
+  gather_facts: false
+  roles:
+    - role: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Probe bidirectional pod and service traffic
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.submariner
+        tasks_from: probe.yml

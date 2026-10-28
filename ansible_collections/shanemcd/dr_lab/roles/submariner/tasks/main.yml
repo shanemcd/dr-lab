@@ -92,3 +92,6 @@
   delay: 10
   changed_when: false
   loop: "{{ acm_spokes }}"
+
+- name: Validate actual cross-site application traffic
+  ansible.builtin.include_tasks: probe.yml

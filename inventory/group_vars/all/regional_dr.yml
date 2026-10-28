@@ -1,0 +1,5 @@
+---
+# Mirrors the shipped ODF 4.22 console DataFoundation asynchronous flow.
+regional_dr_mirrorpeer_name: dr-lab-sites
+regional_dr_policy_name: dr-lab-5m
+regional_dr_interval: 5m

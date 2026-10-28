@@ -1,0 +1,25 @@
+---
+- name: Read the existing immutable DR identity
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - "{{ regional_dr_resource.kind }}"
+      - "{{ regional_dr_resource.name }}"
+      - --ignore-not-found
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_existing
+  changed_when: false
+
+- name: Require existing fields to match the intended policy rather than changing them
+  ansible.builtin.assert:
+    that:
+      - (regional_dr_existing.stdout | from_json).spec[item.key] | default({}) == item.value
+    fail_msg: >-
+      Refusing to change immutable {{ regional_dr_resource.kind }}/{{ regional_dr_resource.name }}
+      field {{ item.key }}; create a separately named policy/peer instead.
+  loop: "{{ regional_dr_resource.spec | dict2items }}"
+  when: regional_dr_existing.stdout | length > 0

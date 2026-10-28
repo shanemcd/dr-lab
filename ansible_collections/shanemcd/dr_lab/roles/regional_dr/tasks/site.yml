@@ -1,0 +1,75 @@
+---
+- name: Wait for hub validation of the managed DRCluster including S3 access
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", --request-timeout=20s, get, drcluster, "{{ regional_dr_site }}", -o, json]
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_cluster_status
+  until: >-
+    regional_dr_cluster_status.rc == 0 and
+    ((regional_dr_cluster_status.stdout | from_json).status.conditions | default([])
+    | selectattr('type', 'equalto', 'Validated')
+    | selectattr('status', 'equalto', 'True') | list | length == 1)
+  retries: 180
+  delay: 10
+  changed_when: false
+
+- name: Require the managed DR cluster operator rollout
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - rollout
+      - status
+      - deployment/ramen-dr-cluster-operator
+      - -n
+      - openshift-dr-system
+      - --timeout=300s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ regional_dr_site }}/auth/kubeconfig"
+  changed_when: false
+
+- name: Require the storage cluster peer to be Peered
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - --request-timeout=20s
+      - get
+      - storageclusterpeer
+      - "{{ (acm_spokes | reject('equalto', regional_dr_site) | first) }}-peer"
+      - -n
+      - "{{ storage_odf_namespace }}"
+      - -o
+      - 'jsonpath={.status.state}'
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ regional_dr_site }}/auth/kubeconfig"
+  register: regional_dr_peer_status
+  until: regional_dr_peer_status.rc == 0 and regional_dr_peer_status.stdout == 'Peered'
+  retries: 180
+  delay: 10
+  changed_when: false
+
+# ODF 4.22 guide section 4.8 step 13: health is namespace-level, not pool-level.
+- name: Require healthy namespace mirroring including daemon, image and group health
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - --request-timeout=20s
+      - get
+      - cephblockpoolradosnamespace
+      - "{{ storage_cluster_name }}-cephblockpool-builtin-implicit"
+      - -n
+      - "{{ storage_odf_namespace }}"
+      - -o
+      - 'jsonpath={.status.mirroringStatus.summary}'
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ regional_dr_site }}/auth/kubeconfig"
+  register: regional_dr_mirror_health
+  until: >-
+    regional_dr_mirror_health.rc == 0 and regional_dr_mirror_health.stdout | length > 0 and
+    (regional_dr_mirror_health.stdout | from_json).health | default('') == 'OK' and
+    (regional_dr_mirror_health.stdout | from_json).daemon_health | default('') == 'OK' and
+    (regional_dr_mirror_health.stdout | from_json).image_health | default('') == 'OK' and
+    (regional_dr_mirror_health.stdout | from_json).group_health | default('') == 'OK'
+  retries: 180
+  delay: 10
+  changed_when: false

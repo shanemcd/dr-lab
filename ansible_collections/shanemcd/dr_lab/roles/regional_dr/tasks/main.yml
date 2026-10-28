@@ -1,0 +1,75 @@
+---
+# Shipped odf-multicluster-console 4.22 create-dr-policy/utils/k8s-utils.ts:
+# DataFoundation creates manageS3 MirrorPeer, then DRPolicy. DRClusters and
+# S3 config are reconciled by the operator, not hand-authored here.
+- name: Select the hub and immutable DR policy payloads
+  ansible.builtin.set_fact:
+    regional_dr_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+    regional_dr_policy_spec:
+      drClusters: "{{ acm_spokes }}"
+      schedulingInterval: "{{ regional_dr_interval }}"
+      replicationClassSelector: {}
+    regional_dr_peer_spec:
+      manageS3: true
+      type: async
+      items:
+        - clusterName: "{{ acm_spokes[0] }}"
+          storageClusterRef: {name: "{{ storage_cluster_name }}", namespace: "{{ storage_odf_namespace }}"}
+        - clusterName: "{{ acm_spokes[1] }}"
+          storageClusterRef: {name: "{{ storage_cluster_name }}", namespace: "{{ storage_odf_namespace }}"}
+
+- name: Refuse mutations of existing policy and peer identities
+  ansible.builtin.include_tasks: immutable.yml
+  loop:
+    - {kind: mirrorpeer, name: "{{ regional_dr_mirrorpeer_name }}", spec: "{{ regional_dr_peer_spec }}"}
+    - {kind: drpolicy, name: "{{ regional_dr_policy_name }}", spec: "{{ regional_dr_policy_spec }}"}
+  loop_control:
+    loop_var: regional_dr_resource
+
+- name: Apply the console-equivalent managed DataFoundation policy
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: multicluster.odf.openshift.io/v1alpha1
+      kind: MirrorPeer
+      metadata:
+        name: {{ regional_dr_mirrorpeer_name }}
+      spec: {{ regional_dr_peer_spec | to_json }}
+      ---
+      apiVersion: ramendr.openshift.io/v1alpha1
+      kind: DRPolicy
+      metadata:
+        name: {{ regional_dr_policy_name }}
+      spec: {{ regional_dr_policy_spec | to_json }}
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_apply
+  changed_when: "'created' in regional_dr_apply.stdout or 'configured' in regional_dr_apply.stdout"
+
+- name: Wait for DR policy validation
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - --request-timeout=20s
+      - get
+      - drpolicy
+      - "{{ regional_dr_policy_name }}"
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_policy_status
+  until: >-
+    regional_dr_policy_status.rc == 0 and
+    ((regional_dr_policy_status.stdout | from_json).status.conditions | default([])
+    | selectattr('type', 'equalto', 'Validated')
+    | selectattr('status', 'equalto', 'True') | list | length == 1)
+  retries: 180
+  delay: 10
+  changed_when: false
+
+- name: Require managed DRCluster validation and storage peering on each site
+  ansible.builtin.include_tasks: site.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: regional_dr_site

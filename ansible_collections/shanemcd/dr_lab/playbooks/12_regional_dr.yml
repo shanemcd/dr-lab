@@ -1,0 +1,13 @@
+---
+- name: Managed DataFoundation asynchronous DR policy
+  hosts: all
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Resolve workspace paths
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Configure managed regional DR
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.regional_dr
