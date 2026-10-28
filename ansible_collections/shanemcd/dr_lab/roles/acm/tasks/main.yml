@@ -74,7 +74,7 @@
     argv:
       - "{{ install_bin_dir }}/oc"
       - get
-      - "subscription/{{ acm_package }}"
+      - "subscriptions.operators.coreos.com/{{ acm_package }}"
       - "-n"
       - "{{ acm_namespace }}"
       - "-o"

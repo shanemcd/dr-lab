@@ -57,7 +57,7 @@
     argv:
       - "{{ install_bin_dir }}/oc"
       - get
-      - subscription
+      - subscriptions.operators.coreos.com
       - "{{ dr_operator_package }}"
       - -n
       - "{{ dr_operator_namespace | default('openshift-operators') }}"
