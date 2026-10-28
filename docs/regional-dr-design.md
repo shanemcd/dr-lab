@@ -51,6 +51,32 @@ availability, successful OLM resolution, runtime compatibility or vendor support
 No subscriptions were created during this discovery. Channel heads can change;
 the runtime catalog/CSV checks remain necessary on every deployment.
 
+## Policy automation contract (4.22 guide section 4.8)
+
+The documented console flow creates a DRPolicy **and** two DRClusters. Applying
+only a hand-written DRPolicy is not equivalent to that flow. Inspect the current
+orchestrator APIs and console implementation before reproducing it in Ansible;
+do not assume the old lab's MirrorPeer manifest is still the entry point.
+
+- Unique policy name per interval; minimum interval one minute. The guide says
+  SchedulingInterval, ReplicationClassSelector, VolumeSnapshotClassSelector and
+  DRClusters cannot be edited. Refuse incompatible existing policy specs rather
+  than silently attempting to patch these fields.
+- Region and S3ProfileName on DRClusters are also non-editable. Capture desired
+  identities before creation and validate them on reruns.
+- Require successful policy validation and **both** DRCluster validations, including
+  object-bucket access from the hub to each site. Check condition types instead
+  of relying on the guide's example positional `.status.conditions[2]` query.
+- Require `odr-cluster-operator` CSV Succeeded and `ramen-dr-cluster-operator`
+  rollout in `openshift-dr-system` on both sites; the hub operator alone is not
+  sufficient.
+- Require each site's `StorageClusterPeer/<remote-managedcluster-name>-peer`
+  state `Peered`, followed by healthy mirroring. DRPolicy validation alone is not
+  a complete replication check. The initial policy also installs VolSync for
+  CephFS; do not introduce a conflicting manual subscription.
+
+These are requirements extracted from the guide, not claims of live completion.
+
 ## Remaining implementation gates
 
 - Establish actual operator resolution and runtime compatibility on ARM64; the catalog names/channels above are discovered, not installed.
