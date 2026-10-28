@@ -32,7 +32,7 @@
       from redhat-operators on {{ dr_target_cluster }}. Review the catalog rather than
       silently installing a different release.
 
-- name: Subscribe in the shared all-namespaces operator namespace
+- name: Subscribe in the selected operator namespace
   ansible.builtin.command:
     argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
     stdin: |
@@ -40,7 +40,7 @@
       kind: Subscription
       metadata:
         name: {{ dr_operator_package }}
-        namespace: openshift-operators
+        namespace: {{ dr_operator_namespace | default('openshift-operators') }}
       spec:
         channel: {{ dr_operator_channel }}
         installPlanApproval: Automatic
@@ -60,7 +60,7 @@
       - subscription
       - "{{ dr_operator_package }}"
       - -n
-      - openshift-operators
+      - "{{ dr_operator_namespace | default('openshift-operators') }}"
       - -o
       - 'jsonpath={.status.installedCSV}'
   environment:
@@ -79,7 +79,7 @@
       - "--for=jsonpath={.status.phase}=Succeeded"
       - "csv/{{ dr_operator_csv.stdout }}"
       - -n
-      - openshift-operators
+      - "{{ dr_operator_namespace | default('openshift-operators') }}"
       - "--timeout={{ dr_operator_timeout_seconds }}s"
   environment:
     KUBECONFIG: "{{ dr_target_kubeconfig }}"

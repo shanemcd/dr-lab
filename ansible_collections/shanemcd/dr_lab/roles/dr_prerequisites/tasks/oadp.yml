@@ -1,0 +1,103 @@
+---
+- name: Select the managed cluster for OADP
+  ansible.builtin.set_fact:
+    dr_target_kubeconfig: "{{ install_base_dir }}/{{ dr_target_cluster }}/auth/kubeconfig"
+
+- name: Ensure the documented OADP namespace
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-adp
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_oadp_namespace
+  changed_when: "'created' in dr_oadp_namespace.stdout or 'configured' in dr_oadp_namespace.stdout"
+
+- name: Inspect existing OADP operator groups before creating one
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, operatorgroups, -n, openshift-adp, -o, json]
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_oadp_groups
+  changed_when: false
+
+- name: Refuse conflicting OADP namespace operator groups
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dr_oadp_groups.stdout | from_json)['items'] | length == 0 or
+        ((dr_oadp_groups.stdout | from_json)['items'] | length == 1 and
+         (dr_oadp_groups.stdout | from_json)['items'][0].spec.targetNamespaces | default([]) == ['openshift-adp'])
+    fail_msg: Existing OADP OperatorGroup must target only openshift-adp; refusing to create conflicting groups.
+
+- name: Create a namespace-scoped OADP operator group when absent
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: dr-lab-oadp
+        namespace: openshift-adp
+      spec:
+        targetNamespaces: [openshift-adp]
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_oadp_group_apply
+  changed_when: "'created' in dr_oadp_group_apply.stdout or 'configured' in dr_oadp_group_apply.stdout"
+  when: (dr_oadp_groups.stdout | from_json)['items'] | length == 0
+
+- name: Install OADP before DR cluster operators to avoid late CRD discovery
+  ansible.builtin.include_tasks: operator.yml
+  vars:
+    dr_operator_namespace: openshift-adp
+    dr_operator_package: "{{ dr_oadp_package }}"
+    dr_operator_channel: "{{ dr_oadp_channel }}"
+
+# ODF 4.22 Regional DR guide section 4.16.1: CSI replication is Ramen's
+# responsibility; Velero protects Kubernetes objects, not volume data.
+- name: Configure the documented discovered-application object protection DPA
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: oadp.openshift.io/v1alpha1
+      kind: DataProtectionApplication
+      metadata:
+        name: velero
+        namespace: openshift-adp
+        labels:
+          app.kubernetes.io/component: velero
+      spec:
+        backupImages: false
+        configuration:
+          nodeAgent:
+            enable: false
+            uploaderType: kopia
+          velero:
+            defaultPlugins: [openshift, aws, kubevirt]
+            noDefaultBackupLocation: true
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_oadp_dpa
+  changed_when: "'created' in dr_oadp_dpa.stdout or 'configured' in dr_oadp_dpa.stdout"
+
+- name: Wait for Velero to become available on this DR site
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - rollout
+      - status
+      - deployment/velero
+      - -n
+      - openshift-adp
+      - --timeout=10s
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_oadp_velero
+  until: dr_oadp_velero.rc == 0
+  retries: "{{ ((dr_operator_timeout_seconds | int) / 20) | int }}"
+  delay: 10
+  changed_when: false

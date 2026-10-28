@@ -11,6 +11,12 @@
     dr_operator_package: "{{ dr_gitops_package }}"
     dr_operator_channel: "{{ dr_gitops_channel }}"
 
+- name: Prepare OADP object protection on both managed clusters before DR configuration
+  ansible.builtin.include_tasks: oadp.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: dr_target_cluster
+
 - name: Install ODF Multicluster Orchestrator and its DR hub operator dependency
   ansible.builtin.include_tasks: operator.yml
   vars:
