@@ -24,6 +24,18 @@ class AcmCsvTests(unittest.TestCase):
         self.assertNotIn('--all', argv)
         self.assertIn('--for=jsonpath={.status.phase}=Succeeded', argv)
 
+    def test_emulation_is_explicit_operator_input_not_owned_resource_patch(self):
+        role = ROOT / 'ansible_collections/shanemcd/dr_lab/roles/virtualization'
+        defaults = yaml.safe_load((role / 'defaults/main.yml').read_text())
+        self.assertIs(defaults['virtualization_use_emulation'], False)
+        tasks = yaml.safe_load((role / 'tasks/cluster.yml').read_text())
+        sub = next(t for t in tasks if t.get('register') == 'virtualization_sub_result')
+        manifest = sub['ansible.builtin.command']['stdin']
+        self.assertIn('name: KVM_EMULATION', manifest)
+        self.assertIn('virtualization_use_emulation | bool', manifest)
+        self.assertIn('configured', sub['changed_when'])
+        self.assertNotIn('unsupportedConfigOverrides', manifest)
+
     def test_virtualization_avoids_replacing_csvs_and_partial_rollout(self):
         tasks = yaml.safe_load((ROOT / 'ansible_collections/shanemcd/dr_lab/roles/virtualization/tasks/cluster.yml').read_text())
         selected = next(t for t in tasks if t.get('register') == 'virtualization_csv_created')

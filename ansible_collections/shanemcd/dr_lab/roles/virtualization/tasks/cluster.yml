@@ -59,10 +59,14 @@
         name: {{ virtualization_package }}
         source: redhat-operators
         sourceNamespace: openshift-marketplace
+        config:
+          env:
+            - name: KVM_EMULATION
+              value: {{ (virtualization_use_emulation | bool | ternary('true', 'false')) | to_json }}
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   register: virtualization_sub_result
-  changed_when: "'created' in virtualization_sub_result.stdout"
+  changed_when: "'created' in virtualization_sub_result.stdout or 'configured' in virtualization_sub_result.stdout"
 
 - name: Resolve this virtualization subscription's installed CSV
   ansible.builtin.command:
@@ -129,6 +133,27 @@
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   changed_when: false
+
+- name: Verify HCO reconciled the explicit software-emulation setting
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - kubevirt
+      - "-n"
+      - "{{ virtualization_namespace }}"
+      - "-o"
+      - 'jsonpath={.items[*].spec.configuration.developerConfiguration.useEmulation}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_emulation_observed
+  until: >-
+    virtualization_emulation_observed.rc == 0 and
+    virtualization_emulation_observed.stdout == 'true'
+  retries: 60
+  delay: 10
+  changed_when: false
+  when: virtualization_use_emulation | bool
 
 - name: Let the virt deployment fleet settle
   ansible.builtin.command:

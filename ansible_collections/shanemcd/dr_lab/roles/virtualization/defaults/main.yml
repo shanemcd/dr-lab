@@ -1,2 +1,4 @@
 ---
-# defaults file for virtualization
+# Upstream HCO's explicit lab-only software-emulation path. Hardware KVM is
+# the default; inventory must opt in on hosts without nested virtualization.
+virtualization_use_emulation: false

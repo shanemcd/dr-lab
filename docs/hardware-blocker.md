@@ -1,73 +1,65 @@
-# VM DR validation is blocked on this host
+# VM execution capabilities and validation limits
 
-The proposed compact-cluster rebuild has **not** been deployed. The existing
-three SNOs are still intact. Offline tests passing is not evidence of live
-cluster installation or DR working.
+## Current state
 
-## Observed hardware and probes
+The real compact-cluster rebuild is live: one ACM hub and two three-master
+OpenShift 4.22.16 ARM64 clusters. Both sites passed standard ODF provisioning,
+Submariner application traffic, authenticated remote S3 with verified TLS,
+and current ODF Regional-DR peering/policy gates. These do **not** establish
+successful VM execution, protected VM recovery, or full one-shot redeployment.
 
-The physical host is an Ampere Altra Q80-30 / Neoverse-N1, aarch64.
-OpenShift nodes are libvirt/KVM guests on that host. A KubeVirt test VM would
-therefore require a second, nested virtualization level.
+The physical host is Ampere Altra Q80-30 / Neoverse-N1, aarch64. Its OpenShift
+nodes are first-level KVM guests. All primary nodes advertise
+`devices.kubevirt.io/kvm: 0`; their guest `/dev/kvm` is absent.
 
-Read-only SSH probe of existing `dr-primary` (192.168.126.12):
-
-```text
-uname -m: aarch64
-/dev/kvm: absent (NO_GUEST_KVM)
-CPU implementer: 0x41
-CPU part: 0xd0c
-```
-
-A diskless, paused QEMU capability probe on the physical host:
+The physical-host capability probe:
 
 ```sh
 timeout 5 qemu-system-aarch64 -accel kvm -machine virt,virtualization=on \
   -cpu host -m 128 -nodefaults -display none -S
 ```
 
-Exited immediately with code 1:
+exited immediately with code 1:
 
 ```text
 qemu-system-aarch64: mach-virt: host kernel KVM does not support providing Virtualization extensions to the guest CPU
 ```
 
-Adding masters or RAM cannot fix this CPU limitation. Installing the
-virtualization operator alone would not demonstrate that a VM can execute.
-Software emulation would change the no-hacks requirement and is not an
-implicitly authorized substitute.
+Adding masters or memory cannot fix this limitation. ARM64 product availability
+is not evidence of nested-virtualization capability on this CPU.
 
-## Sources consulted
+## Explicit upstream software-emulation experiment
 
-- Ampere community explanation of Altra/Altra Max lacking nested virtualization:
-  https://community.amperecomputing.com/t/issues-with-openstack-instance-creation-and-nested-virtualization-on-arm-host-with-qemu/1050
-- Red Hat's RHEL 9 nested virtualization requirements and limitations (the
-  existing OpenShift guests report RHCOS 9.8 / kernel 5.14):
-  https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/configuring_and_managing_virtualization/creating-nested-virtual-machines_configuring-and-managing-virtualization
+The user authorized proceeding through the cluster/storage/DR layers first and
+considering emulation afterward. Those infrastructure gates now pass. The
+inventory explicitly selects `virtualization_use_emulation: true`; the reusable
+role defaults to false. It feeds `KVM_EMULATION` through the OLM Subscription's
+`spec.config.env`, the upstream HCO documented installation path. HCO itself
+owns and reconciles the resulting KubeVirt configuration. The lab does not
+patch a CSV, operator Deployment, KubeVirt CR or unsupported-config annotation.
 
-ARM64 OpenShift Virtualization support must not be confused with support for
-nesting on this particular processor. The local QEMU failure independently
-confirms that this host cannot expose the required virtualization extensions.
+Upstream source references (inspected commit
+`54c05719dc6375c8e0099323aaf90e91428ce8d8`):
 
-## User decision: proceed with the rest first
+- [HCO installation guide, KVM Emulation](https://github.com/kubevirt/hyperconverged-cluster-operator/blob/54c05719dc6375c8e0099323aaf90e91428ce8d8/deploy/kustomize/README.md)
+- [Subscription environment overlay](https://github.com/kubevirt/hyperconverged-cluster-operator/blob/54c05719dc6375c8e0099323aaf90e91428ce8d8/deploy/kustomize/kvm_emulation/subscription.patch.yaml)
+- [HCO handler](https://github.com/kubevirt/hyperconverged-cluster-operator/blob/54c05719dc6375c8e0099323aaf90e91428ce8d8/controllers/handlers/kubevirt.go): reads `KVM_EMULATION` and sets `developerConfiguration.useEmulation`.
 
-The user subsequently authorized continuing the cluster/storage/ACM/DR build
-on this host, then considering software emulation only after those layers run.
-The VM need only remain running during failover, with no substantial workload.
-Emulation has not been implemented or validated. It remains distinct from KVM.
+This is an explicit upstream lab mode, **not** a claim of Red Hat support for
+software-emulated ARM64 VMs or single-host virtualized Regional DR. Until tested,
+even successful acceptance of the environment variable is not proof that the
+shipped ARM64 QEMU can execute a VM. A restricted, non-root capability pod using
+the deployed virt-launcher image (`registry.redhat.io/container-native-virtualization/virt-launcher-rhel9@sha256:2131d3d24616971b92d7e986635673b6dc731da3d43cae46540882993d36596f`)
+reported `aarch64`, QEMU `10.1.0 (qemu-kvm-10.1.0-17.el9_8.5)`, and accelerators
+`kvm` and `tcg`. This establishes that TCG is compiled in, not successful VM boot. The user only requires a minimal running VM,
+not a substantial workload. Actual target VMI execution and protected state must
+be observed; operator availability alone is insufficient.
 
-The alternatives originally presented were:
+## Hardware references
 
-Choose either:
+- [Ampere nested virtualization discussion](https://community.amperecomputing.com/t/issues-with-openstack-instance-creation-and-nested-virtualization-on-arm-host-with-qemu/1050)
+- [RHEL 9 nested virtualization requirements](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/configuring_and_managing_virtualization/creating-nested-virtual-machines_configuring-and-managing-virtualization)
 
-1. Move the VM DR lab to hardware with working nested KVM, or use suitable
-   bare-metal OpenShift nodes. Access and capability checks are needed before
-   committing to that design.
-2. Keep this host and explicitly change the validation workload to a
-   PVC-backed container application. This can exercise storage/application DR,
-   but **does not satisfy the requested VM failover test**. ODF/DR architecture
-   and version support still need independent verification.
-
-The cluster rebuild is now authorized and underway. The opening observations
-above describe the pre-rebuild state. Do not claim completion of the one-shot
-rebuild or VM failover objective until independently verified.
+If shipped emulation cannot execute the workload, hardware with nested KVM or
+bare-metal OpenShift nodes remains necessary. A PVC-backed container test can
+validate storage recovery but cannot substitute for the requested VM failover.
