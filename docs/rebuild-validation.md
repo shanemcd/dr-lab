@@ -2,7 +2,7 @@
 
 ## Attempt 1 — 2026-10-28, loop iteration 26
 
-Status: **in progress**, not full DR acceptance.
+Status: **one-shot infrastructure rebuild passed**, not full DR acceptance.
 
 Executed untagged `ansible-playbook shanemcd.dr_lab.teardown` from the repository
 root. It passed with `ok=84 changed=33 unreachable=0 failed=0`.
@@ -21,7 +21,17 @@ this is not a claim that every historical disk file was cleaned up.
 Launched exactly one untagged `ansible-playbook shanemcd.dr_lab.site` after those
 checks. It must complete all infrastructure and add-on stages plus verification
 without manual recovery before a one-shot infrastructure pass can be recorded.
-No successful rebuild is claimed while it is active.
+The invocation finished successfully at approximately 07:09 UTC after starting
+at 05:20 UTC (about 1 hour 49 minutes):
+
+```text
+lab-server : ok=756 changed=220 unreachable=0 failed=0 skipped=42 rescued=0 ignored=0
+```
+
+The terminal exit marker is `0`. This was a single untagged invocation, with no
+stage restart, manual cluster recovery, or playbook retry. Documentation-only
+commits during the run did not change the executing automation. It proves the
+infrastructure rebuild, not running-VM failover.
 
 At 05:56 UTC (iteration 27), all seven steady nodes are Ready. The hub installer
 completion and membership/schedulability gates passed. The primary installer
@@ -51,6 +61,19 @@ verified TLS. It has advanced through CA-trust setup and GitOps installation on
 all three clusters to OADP prerequisites. Regional DR and final verification are
 still pending; the site process remains active with no terminal recap. No manual
 operator intervention or deployment retry was applied.
+
+Final regional-DR gates passed: policy validation, managed operator rollouts,
+StorageCluster peering and healthy namespace mirroring on both sites. Final
+verification found all seven domains running, all inventory nodes Ready,
+OpenShift 4.22.16 Available, 34/34 operators Available on each cluster, all machine
+config pools Updated, and all guest clocks synchronized through the lab relay.
+The core evidence report remains scoped to core state; the full invocation log
+also records the separate add-on gates.
+
+A private snapshot of both logs, exit markers and the core report is retained in
+`/root/dr-evidence/rebuild-26/` (directory 0700, files 0600), with `SHA256SUMS` for
+local integrity checking. These are local execution records, not third-party
+attestation. The 20 offline unit tests also passed after the run.
 
 Host-local logs (may contain credentials; retain privately):
 - `/tmp/dr-full-teardown-26.log`, exit marker `/tmp/dr-full-teardown-26.rc` = 0.

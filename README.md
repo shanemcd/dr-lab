@@ -15,10 +15,13 @@ inventory, prerequisites, capacity, credentials and individual stages.
 
 ## Verification status — not complete acceptance
 
-The installed infrastructure passed live cluster, storage, overlay, authenticated
-TLS S3 and regional-policy checks. This is **not** proof that the entire lab can
-be torn down and redeployed in one shot, or that a running VM can fail over.
-Those acceptance criteria remain outstanding.
+A full teardown followed by a **single untagged infrastructure deployment**
+passed on 2026-10-28: `ok=756 changed=220 failed=0 rescued=0 ignored=0`.
+This includes live cluster, storage, overlay, authenticated TLS S3, regional-DR
+policy/peering, and final clock checks, with no manual recovery or stage retry.
+See [rebuild validation](docs/rebuild-validation.md) for scope and evidence.
+Running-VM execution and actual failover remain outstanding; infrastructure
+success does not satisfy those acceptance criteria.
 
 This host cannot expose nested ARM virtualization. Stock ARM64 VM admission
 requires `host-passthrough`, incompatible with the tested software-emulation
