@@ -102,6 +102,21 @@ An isolated second diagnostic uses distinct names/selectors (`dr-halted-probe-v2
 `halted-marker-v2`); it cannot select the original PVC. The original failed
 exercise is retained as evidence, not retroactively declared successful.
 
+The corrected second exercise passed protection (`/tmp/dr-halted-v2-protection.log`,
+12 ok / 4 changed / 0 failed); both namespaces have the same SCC UID/group range
+`1000930000/10000` and SELinux MCS `s0:c31,c0`. Its full relocation play still
+failed the strict source-PVC cleanup timeout (`/tmp/dr-halted-v2-relocation.log`).
+After that process finished, only the recovery verification portion was resumed
+with `--start-at-task 'Wait for the controller to finish planned relocation'`
+and explicit `lab_user_home=/root`, namespace/name overrides. This partial run
+(`/tmp/dr-halted-v2-recovery-read.log`) passed 6 ok / 2 changed / 0 failed:
+current-generation source Secondary / target Primary, restored VM Halted,
+64 MiB disk size and exact marker read at 1 MiB by a restricted read-only pod.
+The reader was removed after success. **This proves recovery can read replicated
+data and restore the halted VM object, not complete source cleanup or a running
+VM failover.** Source finalizers remain untouched; `Protected=False` and cleanup
+remain unresolved rather than being hidden behind the partial-run recap.
+
 Sources:
 - [ODF 4.22 Regional DR guide, section 4.11](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index)
 - [Ramen namespace SCC retention implementation](https://github.com/RamenDR/ramen/blob/main/internal/controller/drplacementcontrol.go)
