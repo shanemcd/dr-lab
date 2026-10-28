@@ -11,9 +11,20 @@
 - Validate a full teardown and single untagged infrastructure deployment on
   2026-10-28 (`ok=756 changed=220 failed=0 rescued=0 ignored=0`), without manual
   repair or stage retries. See the root `docs/rebuild-validation.md`.
-- Document the ARM nested-virtualization/emulation execution blocker. Running-VM
-  failover remains unverified; separate halted-VM diagnostics are not acceptance
-  substitutes and are not included in the main pipeline.
+- Document the historical ARM nested-virtualization/emulation execution blocker;
+  current ARM running-guest recovery remains unvalidated.
+- Add native x86_64/aarch64 platform profiles, release pins, capacity/nesting
+  preflight, isolated pinned controller tools and maintained public guides.
+- Add optional PVC-backed running-VM provisioning and initial protection.
+  Demonstrate native x86_64 relocation, physically isolated failover and
+  two-marker return with manual Velero metadata-import assistance. Unattended
+  restore compatibility and maximum ongoing-write RPO remain unestablished;
+  see the root `docs/current-validation.md` and `docs/compatibility.md`.
+- Harden scoped shell boundaries, ownership checks before per-node VM staging,
+  read-only teardown-path validation and generated-credential Git exclusions.
+  These guards do not prove filesystem ownership or eliminate deletion races.
+  Separate halted diagnostics remain outside the main pipeline and cannot
+  substitute for running-guest acceptance.
 
 ## 0.3.0
 

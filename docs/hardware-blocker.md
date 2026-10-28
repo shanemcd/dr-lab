@@ -1,8 +1,14 @@
 # VM execution capabilities and validation limits
 
-## Current state
+## Historical ARM deployment (not the current host)
 
-The real compact-cluster rebuild is live: one ACM hub and two three-master
+This report records the previous Ampere Altra experiment. The current native
+x86_64 deployment is tracked in [current validation](current-validation.md).
+The portable inventory now disables software emulation by default and host
+preflight rejects it for DR acceptance. Commands and image digests below are
+historical reproductions, not instructions for the current deployment.
+
+The previous compact-cluster rebuild comprised one ACM hub and two three-master
 OpenShift 4.22.16 ARM64 clusters. Both sites passed standard ODF provisioning,
 Submariner application traffic, authenticated remote S3 with verified TLS,
 and current ODF Regional-DR peering/policy gates. A full teardown and single
@@ -32,10 +38,9 @@ is not evidence of nested-virtualization capability on this CPU.
 
 ## Explicit upstream software-emulation experiment
 
-The user authorized proceeding through the cluster/storage/DR layers first and
-considering emulation afterward. Those infrastructure gates now pass. The
-inventory explicitly selects `virtualization_use_emulation: true`; the reusable
-role defaults to false. It feeds `KVM_EMULATION` through the OLM Subscription's
+After the historical cluster/storage/DR infrastructure gates passed, an
+explicit emulation experiment selected `virtualization_use_emulation: true`.
+This is no longer the inventory default or an accepted execution path. It feeds `KVM_EMULATION` through the OLM Subscription's
 `spec.config.env`, the upstream HCO documented installation path. HCO itself
 owns and reconciles the resulting KubeVirt configuration. The lab does not
 patch a CSV, operator Deployment, KubeVirt CR or unsupported-config annotation.
@@ -93,9 +98,10 @@ execution path is established independently.
 
 ## Resuming the remaining acceptance work
 
-Leave the verified infrastructure intact until replacement hardware and a
-migration plan are agreed. More memory, more masters, and another installation
-on this host will not resolve the observed execution failure.
+Do not rebuild an Altra host hoping that additional masters or memory will
+resolve this execution failure. The current work has moved to a separate
+x86_64 host with nested KVM; that environment still needs independent workload
+execution and recovery evidence.
 
 A candidate environment must first demonstrate usable KVM in the OpenShift
 nodes, not merely advertise ARM64 or accept the emulation setting. Options are

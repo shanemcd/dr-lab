@@ -1,50 +1,41 @@
-# DR lab plan and acceptance status
+# Project scope and acceptance
 
-This replaces the original implementation sketch. Inventory and playbooks are
-now implemented; historical sketches in Git history are not current instructions.
+The maintained operator entrypoint is [getting started](docs/getting-started.md).
+The current [topology and status](README.md), [platform matrix](docs/platforms.md),
+and [validation criteria](docs/validation.md) supersede host-specific planning
+notes. Historical deployment reports are evidence for their stated scope only.
 
-## Implemented topology
+## Scope
 
-- `dr-hub`: ACM hub SNO, bootstrap-in-place, 12 vCPU / 40 GiB / 160 GiB root.
-- `dr-primary` and `dr-recovery`: three schedulable masters each, real UPI
-  installation with temporary bootstrap guests and ownership-guarded removal.
-- Each master: 20 vCPU / 40 GiB / 120 GiB root + dedicated 120 GiB ODF disk.
-- Two temporary bootstraps: 4 vCPU / 16 GiB / 60 GiB each.
-- Steady budget: 132 vCPU, 280 GiB RAM, 1,600 GiB virtual root/data capacity.
-  Bootstrap peak: 140 vCPU, 312 GiB RAM, 1,720 GiB virtual capacity, plus host
-  headroom. Thin allocation is not a substitute for capacity planning.
-- Default network: `192.168.126.0/24`; hub `.11`, primary VIP `.12` and masters
-  `.13`–`.15`, recovery VIP `.16` and masters `.17`–`.19`, bootstraps `.21`/`.22`.
-  Actual settings live in `inventory/group_vars/all/`.
+- Reproducible deployment on native x86_64 and aarch64 Red Hat-family hosts.
+- Clear capacity, nested virtualization, network and credential prerequisites.
+- ACM hub plus two compact workload clusters with internal replicated ODF.
+- Submariner, OADP and Ramen-based protection of a real PVC-backed running VM.
+- Public documentation without credentials or assumptions about an author's host.
 
-## Completed infrastructure acceptance
+## Acceptance gates
 
-- [x] Pinned OpenShift 4.22.16 ARM64 artifacts, fresh ignition and time relay.
-- [x] Core install, exact Ready membership, schedulable masters, safe bootstrap cleanup.
-- [x] Virtualization operator gates, full ACM hub, managed-cluster add-ons.
-- [x] Standard replicated three-node ODF, RBD and object provisioning.
-- [x] Submariner and real cross-site HTTP/authenticated TLS S3 exchange.
-- [x] GitOps/OADP prerequisites and supported CA configuration.
-- [x] Managed regional-DR policy, peering, mirroring and operator rollout gates.
-- [x] Full teardown + single untagged infrastructure deployment, without manual
-  recovery/retry: 2026-10-28, 756 ok / 220 changed / 0 failed / 0 rescued / 0 ignored.
-- [x] Final core-state and seven-guest clock verification; private evidence retained.
+1. Offline tests and playbook syntax checks pass on the supported controller.
+2. Host preflight and the complete infrastructure deployment pass.
+3. A stock guest runs on each managed cluster with hardware virtualization.
+4. VM disk and object checkpoints are protected and recoverable.
+5. Planned relocation preserves guest data and single-writer safety.
+6. Fenced unplanned failover recovers a running guest with measured RPO/RTO.
+7. Replication resumes and failback passes the same data-integrity checks.
 
-See [rebuild validation](docs/rebuild-validation.md) for evidence and limitations.
-This is a test-only deployment, not certification of a supported production DR
-architecture or independent physical failure domains.
+Native x86_64 infrastructure, running guests at both sites, checkpoints, planned
+relocation, physically isolated failover and assisted return have been observed.
+Both the original marker and a separate post-recovery marker survived return to
+the initial primary. This is **assisted recovery evidence**, not unattended
+reproducibility: each restore needed native Velero metadata import. Recorded
+timings include that assistance; maximum ongoing-write RPO remains unmeasured.
+See [current evidence](docs/current-validation.md) and
+[compatibility](docs/compatibility.md) for the exact scope and remaining limits.
 
-## Remaining mandatory acceptance
+The historical ARM host passed infrastructure gates but could not execute the
+required nested guest; current ARM execution remains unvalidated. Halted-VM
+relocation is not acceptance of running-VM recovery. See
+[hardware limitations](docs/hardware-blocker.md) for that historical result.
 
-- [ ] Execute a minimal stock PVC-backed VM, observe Running and Ready.
-- [ ] Protect its disk/object state and perform actual unplanned failover with
-  real source isolation/fencing, then verify recovery execution and disk data.
-
-These remain blocked by the tested host's nested ARM virtualization limitations
-and the stock ARM64 admission/TCG CPU-mode conflict. Preserve the healthy lab
-pending compatible hardware; do not redeploy or bypass validation to hide the
-blocker. The separate halted-VM diagnostic is not a substitute and retains a
-historical unresolved source-PVC cleanup failure.
-
-See [hardware blocker and handoff](docs/hardware-blocker.md) for the remaining
-sequence. No full mission completion is claimed.
+Do not remove readiness or safety checks to turn a blocked gate into a pass.
+Do not claim independent physical-site resilience for a single-host topology.

@@ -92,7 +92,7 @@
   ansible.builtin.set_fact:
     artifacts_clients_need_extract: >-
       {{ not artifacts_client_stamp_stat.stat.exists
-         or (artifacts_client_stamp_raw.content | default('') | b64decode | trim) != ocp_version }}
+         or (artifacts_client_stamp_raw.content | default('') | b64decode | trim) != ocp_version ~ '/' ~ ocp_arch }}
 
 - name: Extract OpenShift client tools
   ansible.builtin.unarchive:
@@ -106,7 +106,7 @@
 
 - name: Write client tools stamp
   ansible.builtin.copy:
-    content: "{{ ocp_version }}"
+    content: "{{ ocp_version }}/{{ ocp_arch }}"
     dest: "{{ install_bin_dir }}/{{ artifacts_client_stamp_name }}"
     mode: "0644"
   when: artifacts_clients_need_extract | bool

@@ -14,9 +14,11 @@ host_prep_required_devices:
 # and monitoring growth, not the full nominal sizes. CPU headroom is low
 # because lab workers are mostly idle and QEMU vCPUs are ordinary host
 # threads, freely scheduled; memory headroom bounds the committed guest
-# RAM + CXL regions (default 2-CXL fleet: 88 GiB committed).
+# RAM (312 GiB peak with the default topology and both bootstraps).
 host_prep_mem_headroom_gib: 12
 host_prep_cpu_headroom: 4
+# Explicit opt-in only. Memory and disk capacity are never overcommitted.
+host_prep_cpu_overcommit_ratio: 1.0
 host_prep_disk_headroom_gib: 30
 
 # Workspace directories ensured by this role (secrets dirs 0700). Each

@@ -6,7 +6,7 @@
   <currentMemory unit='bytes'>{{ node.ram | human_to_bytes }}</currentMemory>
   <vcpu placement='static'>{{ node.vcpu }}</vcpu>
   <os firmware='efi'>
-    <type arch='aarch64' machine='virt'>hvm</type>
+    <type arch='{{ lab_arch }}' machine='{{ lab_arch_profile.machine }}'>hvm</type>
   </os>
 {% if not (libvirt_probe | default(false) | bool) %}
   <sysinfo type='fwcfg'><entry name='opt/com.coreos/config' file='{{ libvirt_runtime_dir }}/{{ node.name }}.ign'/></sysinfo>

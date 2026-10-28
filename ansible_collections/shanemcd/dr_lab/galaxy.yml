@@ -6,7 +6,7 @@ readme: README.md
 authors:
   - Shane McDonald <me@shanemcd.com>
 description: >-
-  Regional disaster-recovery lab on one aarch64 libvirt host: an ACM
+  Regional disaster-recovery lab on one native x86_64 or aarch64 KVM host: an ACM
   hub SNO and two three-master compact OpenShift clusters, with replicated
   ODF, Submariner, GitOps/OADP, and managed regional-DR policy and peering.
   Test-only infrastructure; running-VM failover remains unverified.

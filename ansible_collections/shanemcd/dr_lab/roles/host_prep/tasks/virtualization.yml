@@ -1,0 +1,33 @@
+---
+- name: Read x86 nested virtualization state
+  ansible.builtin.shell: |
+    for parameter in /sys/module/kvm_intel/parameters/nested /sys/module/kvm_amd/parameters/nested; do
+      if test -r "$parameter"; then
+        printf '%s ' "$parameter"
+        tr -d '\n' < "$parameter"
+        printf '\n'
+      fi
+    done
+  register: host_prep_nested
+  changed_when: false
+  when: lab_arch == 'x86_64'
+
+- name: Require x86 nested virtualization
+  ansible.builtin.assert:
+    that:
+      - host_prep_nested.stdout is search('(?m) (Y|1)$')
+    fail_msg: >-
+      Nested virtualization is disabled. Enable nested KVM for kvm_intel or
+      kvm_amd on the physical host, then rerun preflight. Do not unload KVM
+      while other guests are running. Software emulation is not a substitute.
+  when: lab_arch == 'x86_64'
+
+- name: Require hardware virtualization for DR acceptance
+  ansible.builtin.assert:
+    that:
+      - not virtualization_use_emulation | bool
+    fail_msg: >-
+      Set virtualization_use_emulation=false and use hardware capable of
+      exposing KVM inside the OpenShift guests. ARM hosts require nested
+      virtualization support in the CPU, firmware, kernel, and QEMU; /dev/kvm
+      on the outer host alone does not prove nested guests can run.

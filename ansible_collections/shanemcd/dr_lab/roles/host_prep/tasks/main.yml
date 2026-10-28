@@ -19,6 +19,9 @@
       This lab requires a RedHat-family host (RHEL, CentOS, Fedora); found
       {{ ansible_facts['os_family'] | default('unknown') }}.
 
+- name: Check nested virtualization prerequisites
+  ansible.builtin.include_tasks: virtualization.yml
+
 - name: Record SELinux status
   ansible.builtin.set_fact:
     host_prep_selinux_status: "{{ (ansible_facts.get('selinux') or {}).get('status', 'missing') }}"
@@ -53,15 +56,17 @@
   # fleet already up failed the bare-host memory assert, although the
   # running QEMU guests hold exactly the RAM the topology asks for. Their
   # committed guest RAM therefore counts toward the budget (they are this
-  # lab's own VMs, identified via the run-dir pidfiles with live pids —
-  # the same liveness rule the run scripts' --status uses). Page cache is
+  # lab's VMs, looked up by their inventory domain names in libvirt).
+  # Page cache is
   # reclaimable, so the budget reads MemAvailable, never MemFree.
   ansible.builtin.shell: |
     set -euo pipefail
     committed=0
-    for spec in {{ host_prep_node_mem_specs }}; do
+    for spec in {{ host_prep_node_mem_specs.split() | map('quote') | join(' ') }}; do
       name="${spec%%=*}"
-      gib="$(( ${spec#*=} ))"
+      gib="${spec#*=}"
+      [[ "$gib" =~ ^[0-9]+$ ]] || { echo 'Invalid guest RAM specification' >&2; exit 1; }
+      gib=$((10#$gib))
       command -v virsh >/dev/null || continue
       state=$(LC_ALL=C virsh -c {{ libvirt_uri | quote }} domstate "$name" 2>/dev/null || true)
       [ "$state" = 'running' ] || continue
@@ -97,10 +102,17 @@
 - name: Assert CPU capacity
   ansible.builtin.assert:
     that:
-      - ansible_facts['processor_vcpus'] >= host_prep_required_vcpu + host_prep_cpu_headroom
+      - host_prep_cpu_overcommit_ratio | float >= 1
+      - ansible_facts['processor_vcpus'] | int > host_prep_cpu_headroom | int
+      - >-
+        ((ansible_facts['processor_vcpus'] | int - host_prep_cpu_headroom | int)
+         * host_prep_cpu_overcommit_ratio | float) >= host_prep_required_vcpu | int
     fail_msg: >-
-      Host has {{ ansible_facts['processor_vcpus'] }} vCPUs but the topology needs
-      {{ host_prep_required_vcpu }} plus {{ host_prep_cpu_headroom }} headroom.
+      Host has {{ ansible_facts['processor_vcpus'] }} logical CPUs; reserving
+      {{ host_prep_cpu_headroom }} for the host at the configured guest CPU
+      overcommit ratio {{ host_prep_cpu_overcommit_ratio }} cannot accommodate
+      {{ host_prep_required_vcpu }} guest vCPUs. Use more hardware or explicitly
+      set host_prep_cpu_overcommit_ratio for a lab with accepted CPU contention.
 
 - name: Ensure workspace directories
   ansible.builtin.file:
@@ -166,6 +178,13 @@
       {{ host_prep_disk_budget_gib }} GiB but the guest disks need
       {{ host_prep_required_disk_gib }} GiB plus
       {{ host_prep_disk_headroom_gib }} GiB headroom.
+
+- name: Load host virtualization network modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop: [vhost_net, tun]
 
 - name: Stat required devices
   ansible.builtin.stat:
@@ -274,11 +293,10 @@
     - host_prep_missing_packages | default([]) | length > 0
     - not ansible_check_mode
 
-- name: Ensure the kubernetes Python library for kubernetes.core modules
-  ansible.builtin.pip:
+- name: Ensure the kubernetes Python library for system Python modules
+  ansible.builtin.package:
     name: "{{ python_kubernetes_package }}"
-    executable: pip3
-    extra_args: "--user"
+    state: present
 
 - name: Ensure firewalld is enabled and started
   # The lab network carries an explicit firewalld zone; libvirt refuses to

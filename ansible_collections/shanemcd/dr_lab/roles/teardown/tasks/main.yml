@@ -1,9 +1,9 @@
 ---
-# teardown: reverse-layer rollback. Layers are TAGGED; a bare run
-# executes every layer in file order (reverse build order): acm →
-# virtualization → vms → network → artifacts → install-data. Use
-# --tags <layer> for a single
-# layer. Every task is idempotent — a second teardown run is a no-op.
+# teardown: tagged rollback. A bare run removes VMs, network, artifacts
+# and install-data. It deliberately skips in-cluster ACM/virtualization
+# uninstall: those APIs disappear with the VMs. Use --tags acm and then
+# --tags virtualization BEFORE removing VMs if an operator uninstall is
+# needed. Each selected layer tolerates resources already absent.
 # Destructive command tasks are check-guarded, so --check dry-runs the
 # whole playbook.
 #
@@ -11,6 +11,29 @@
 # layer first. Shared libvirt services and unrelated resources are
 # retained. For a rebuild after the VM layer or deeper, regenerate
 # ignition within a fresh window.
+
+- name: Validate deletion paths before any teardown mutation
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', role_path ~ '/files/validate_paths.py') }}"
+  environment:
+    DR_TEARDOWN_PATHS: >-
+      {{ {'home': lab_user_home,
+          'protected': [playbook_dir, lab_user_home ~ '/.ssh', install_pull_secret_path],
+          'paths': {
+            'vm_assets_dir': vm_assets_dir, 'install_base_dir': install_base_dir,
+            'vm_ignition_dir': vm_ignition_dir, 'vm_run_dir': vm_run_dir,
+            'vm_logs_dir': vm_logs_dir, 'vm_images_dir': vm_images_dir,
+            'artifacts_downloads_dir': artifacts_downloads_dir,
+            'libvirt_runtime_dir': libvirt_runtime_dir,
+            'loadbalancer_state_dir': loadbalancer_state_dir},
+          'names': ((lab_nodes + bootstrap_nodes + clusters) | map(attribute='name') | list)
+            + [vms_master_iso_name, network_sysctl_conf_name] } | to_json }}
+  check_mode: false
+  changed_when: false
+  tags: always
 
 - name: Require a reachable libvirt service before cleanup
   ansible.builtin.command:
@@ -157,7 +180,7 @@
     state: absent
   tags: vms
 
-# --- Layer: acm (FIRST — reverse build order) -------------------------------
+# --- Optional layer: acm (explicit tag, while clusters still run) ------------
 # Un-import the spokes, then remove MCE from the hub. Included tasks
 # carry `tags: acm` themselves and skip when the hub kubeconfig is gone.
 
@@ -166,7 +189,7 @@
   when: "'all' not in ansible_run_tags and 'vms' not in ansible_run_tags"
   tags: acm
 
-# --- Layer: virtualization (per cluster) -------------------------------------
+# --- Optional layer: virtualization (explicit tag, clusters still running) ---
 # Each included task is idempotent (oc delete --ignore-not-found) and
 # skips clusters whose kubeconfig no longer exists (already torn down).
 
@@ -316,6 +339,7 @@
     marker: "# {mark} DR-LAB NTP RELAY"
     state: absent
   notify: Restart host chronyd after relay removal
+  tags: network
 
 - name: Remove the ip_forward sysctl drop-in
   ansible.builtin.file:

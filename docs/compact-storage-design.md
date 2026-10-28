@@ -1,108 +1,90 @@
-# Compact storage design (live validation in progress)
+# Compact cluster storage design
 
-## Initial runtime findings (2026-10-28)
+## Configuration contract
 
-- Ten vCPUs per compact node was insufficient: default RGW and NooBaa core
-  pods remained Pending with `3 Insufficient cpu`. Inventory now allocates
-  20 vCPUs per compact node (132 steady-state lab vCPUs; 140 with bootstraps,
-  within the host's 160 cores). Default operator resource requests are retained.
-- Applied the sizing change to the existing six guests by graceful shutdown,
-  persistent libvirt vCPU change, and restart, one node at a time. Each node
-  returned Ready with capacity 20 and all three etcd pods Ready before the
-  next shutdown. One shutdown exceeded the initial 120-second bound; it was
-  allowed to finish normally, not force-powered off. Fresh deployments get
-  the corrected sizing directly and require no resize pass.
-- Primary LSO created three distinct 120 GiB block PVs; ODF created three OSDs,
-  three mons, CSI and NooBaa. NooBaa reached Ready; StorageCluster remains
-  Progressing and Ceph HEALTH_WARN. Storage role timed out during the resize
-  sequence; this is NOT a completed storage validation. Recovery storage has
-  not yet been installed because the role processes sites sequentially.
-- Remaining health findings: `MON_CLOCK_SKEW`, `AUTH_INSECURE_CLIENT_KEY_TYPE`,
-  `AUTH_INSECURE_KEYS_ALLOWED`, `AUTH_INSECURE_KEYS_CREATABLE`. Guest chrony
-  reports Stratum 0 / Not synchronised and unreachable public pool sources.
-  Fix reachable time service declaratively and investigate documented Ceph
-  key migration requirements; do not silence warnings or weaken health gates.
+Each managed cluster has three schedulable control-plane nodes. Each node gets
+one dedicated raw virtio data disk (`/dev/vdb`) at guest creation. The root disk
+(`/dev/vda`) must never be selected for local storage. Default data disks are
+120 GiB; overrides for a new test deployment must also adjust
+`storage_device_request` to fit. See [getting started](getting-started.md).
 
-## Time synchronization and CephX investigation
+The storage role provisions:
 
-The host is synchronized to reachable upstream NTP servers, but the guests'
-public NTP pools are unreachable. Host preparation now adds an owned chrony
-`allow` block for the lab subnet only. It does not enable `local stratum` or
-advertise an unsynchronized clock. Fresh SNO and compact ignition includes the
-same master MachineConfig pointing chrony to the lab gateway. For existing
-clusters, `ansible-playbook ansible_collections/shanemcd/dr_lab/playbooks/sync_time.yml`
-reconciles that configuration and waits for the master pools. This can reboot
-nodes through normal MCO drains; the hub API is unavailable during its SNO reboot.
-Full teardown removes only the owned relay block, preserving host upstreams.
-
-CephX findings must be distinguished from the real clock warning:
-
-- Upstream AES256K CSI keys require kernel support and Ceph-CSI >=3.16.3.
-  Do not rotate CSI keys or restrict allowed ciphers based solely on a
-  health warning: doing so can cut off storage clients.
-- Current RHCOS kernel is `5.14.0-687.50.1.el9_8.aarch64`; its libceph module
-  contains `ceph_krb5_encrypt`/`ceph_krb5_decrypt`. Thus its version number alone
-  does NOT prove absence of support. Ceph's advisory explicitly notes backports
-  to CentOS Stream 9/10. Verify vendor compatibility and actual mounts first.
-- Live daemon/admin keys already use AES256K. The six AES client entities are
-  four CSI identities, `client.ocs-metrics-exporter-ceph-auth`, and
-  `client.rbd-mirror-peer`. There is no demonstrated reason to rotate daemon
-  keys again. StorageCluster exposes managedResources.cephCluster.security.cephx
-  controls; any eventual rotation must use its owning API, not edit generated
-  secrets or operator deployments.
-- Direct `ceph health detail` revealed the operator's existing sticky mutes on
-  the four authentication compatibility warnings. The lab did NOT apply these
-  mutes (none appear in its manifests or CephCluster healthCheck spec). A future
-  HEALTH_OK result therefore does not establish AES256K-only client security.
-  Report these vendor defaults explicitly; do not claim warnings were fixed.
-
-References:
-https://www.rook.io/docs/rook/v1.19/Storage-Configuration/Advanced/cephx-key-rotation
-https://ceph.io/en/news/blog/2026/v20-2-4-v19-2-6-combo-released
-
-## Intended configuration
-
-Each managed cluster has three schedulable control-plane nodes. Every node
-gets its own dedicated raw 120 GiB virtio disk as `/dev/vdb` at guest creation.
-The root disk `/dev/vda` must never be consumed by LSO.
-
-The storage role now uses:
-
-1. OLM subscriptions for Local Storage Operator and ODF 4.22.
+1. Local Storage Operator and ODF 4.22 through normal OLM subscriptions.
 2. ODF storage-node labels on all three masters.
-3. A `LocalVolume` selecting exactly those hosts and `/dev/vdb`, Block mode,
-   storage class `localblock`.
+3. A Block-mode `LocalVolume`, class `localblock`, selecting exactly the expected
+   hosts and `/dev/vdb`.
 4. Exactly three usable local PVs with node affinity covering all three hosts.
-5. A standard internal `StorageCluster` device set: count 1, replica 3,
-   portable false, 119 GiB requested per device, mon host path `/var/lib/rook`.
-6. StorageCluster Ready, Ceph HEALTH_OK, and a dynamically provisioned 1 GiB
-   block RBD PVC binding in a test namespace.
-7. NooBaa Ready, a dynamically provisioned ObjectBucketClaim Bound, and
-   nonempty issued endpoint/configuration and credential fields. The lab-only
-   smoke bucket is reused on reruns and removed with full cluster teardown.
-   Credential reads are `no_log`; no live keys are written to repository files.
+5. An internal `StorageCluster` device set: count 1, replica 3, portable false,
+   default 119 GiB request per device and mon host path `/var/lib/rook`.
+6. StorageCluster Ready, Ceph HEALTH_OK and a dynamically provisioned 1 GiB
+   block RBD smoke PVC bound.
+7. NooBaa Ready, a dynamic ObjectBucketClaim Bound, and nonempty issued endpoint,
+   configuration and credential fields. Credential reads use `no_log`.
 
-The object gate tests provisioning, not authenticated S3 put/get or remote
-TLS/overlay reachability. Those checks remain necessary in the DR layer.
-NooBaa readiness is a prerequisite in the ODF 4.22 Regional DR guide, section
-4.5 (and the policy workflow in section 4.8):
-https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index
+The object smoke gate proves provisioning, not authenticated S3 exchange,
+replication or recovery. Separate cross-site transport, TLS, object capture,
+and disk checkpoint checks remain necessary. The lab smoke resources are reused
+on reruns and disappear with cluster teardown.
 
-There is no SINGLE_NODE override, CSV editing, topology-map/status patch,
-replica-1 pool, or post-install VM disk hotplug. The old SNO-specific disk
-hotplug/restart tasks have been removed.
+No SINGLE_NODE override, CSV editing, topology/status patch, replica-1 pool or
+post-install VM disk hotplug is used. Three replicas within virtual nodes on a
+single physical host do **not** protect against that host's failure.
 
-Sources consulted:
+## Sizing
 
-- ODF 4.22 infrastructure requirements, including three-master compact
-  deployments and ODF-only aggregate CPU/memory requirements:
-  https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/planning_your_deployment/infrastructure-requirements_rhodf
-- Historical declarative localblock StorageCluster example (count/replica/
-  portable semantics; this is not proof of current end-to-end support):
-  https://docs.redhat.com/en/documentation/red_hat_openshift_container_storage/4.3/html/deploying_openshift_container_storage/deploying-openshift-container-storage
+Defaults allocate 20 vCPU and 40 GiB RAM to each compact node. In the historical
+ARM experiment, ten vCPUs left default RGW/NooBaa pods Pending with
+`3 Insufficient cpu`. Raising guest CPUs to 20 resolved scheduling pressure
+without reducing vendor resource requests. Host CPU overcommit is a separate,
+explicit policy; it does not reduce Kubernetes allocatable CPUs.
 
-The compact guide describes bare-metal clusters; this lab uses virtualized
-nodes on one host and is not resilient to failure of that host. Vendor support
-for this exact ARM64 virtualized DR combination is not established by these
-references. Live provisioning, Ceph health, PVC binding, and DR validation
-remain required; lint alone is not sufficient.
+The historical live resize was performed one node at a time with graceful
+shutdown, persistent vCPU change and readiness/etcd checks before the next node.
+Fresh deployments use the corrected sizing directly; changing a variable on a
+live deployment is not an automated rolling resize procedure.
+
+## Time synchronization
+
+Ceph requires synchronized clocks. Historical guests could not reach public NTP
+pools and reported `MON_CLOCK_SKEW`, Stratum 0 and Not synchronised. Host
+preparation now enables an owned chrony relay rule restricted to the lab subnet.
+It does not use `local stratum` or advertise an unsynchronized clock. Ignition
+configures the master MachineConfig to use the lab gateway.
+
+For existing clusters, `shanemcd.dr_lab.sync_time` reconciles this configuration
+and waits for master pools. Normal MCO drains may reboot nodes; a SNO hub's API
+will be unavailable during reboot. Teardown removes only the owned relay rule,
+preserving host upstreams. Investigate actual clock status instead of muting
+Ceph clock warnings.
+
+## CephX security caveat from the historical ARM deployment
+
+A HEALTH_OK gate is not evidence of AES256K-only client security. Direct Ceph
+inspection found vendor-installed sticky mutes for
+`AUTH_INSECURE_CLIENT_KEY_TYPE`, `AUTH_INSECURE_KEYS_ALLOWED` and
+`AUTH_INSECURE_KEYS_CREATABLE`. The lab did not add mutes or weaken health
+checks. Reinspect actual vendor defaults on each release.
+
+Historical daemon/admin keys already used AES256K. Six AES client identities
+remained: four CSI identities, `client.ocs-metrics-exporter-ceph-auth`, and
+`client.rbd-mirror-peer`. Do not rotate keys or restrict ciphers solely to clear
+a health warning: storage access can break. Upstream AES256K CSI keys require
+compatible kernel support and Ceph-CSI >=3.16.3. The historical RHCOS
+`5.14.0-687.50.1.el9_8.aarch64` libceph module contained
+`ceph_krb5_encrypt`/`ceph_krb5_decrypt`; version numbers alone do not rule out
+backports. Verify vendor compatibility and actual mounts before rotation.
+Use the owning StorageCluster managed-resource CephX API, not generated Secrets
+or operator Deployments, for any supported change.
+
+## Evidence and references
+
+The historical ARM rebuild passed storage provisioning and health gates; see
+[rebuild evidence](rebuild-validation.md). That does not certify the current
+x86_64 deployment; its status is in [current evidence](current-validation.md).
+Neither result establishes running-VM failover or production support.
+
+- [ODF 4.22 infrastructure requirements](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/planning_your_deployment/infrastructure-requirements_rhodf)
+- [ODF 4.22 Regional DR guide](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index)
+- [Rook CephX key rotation](https://www.rook.io/docs/rook/v1.19/Storage-Configuration/Advanced/cephx-key-rotation)
+- [Ceph compatibility advisory](https://ceph.io/en/news/blog/2026/v20-2-4-v19-2-6-combo-released)

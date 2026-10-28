@@ -1,0 +1,40 @@
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: {{ workload_name }}
+  namespace: openshift-dr-ops
+  annotations:
+    cluster.open-cluster-management.io/experimental-scheduling-disable: 'true'
+spec:
+  predicates: []
+---
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: {{ workload_name }}
+  namespace: openshift-dr-ops
+spec:
+  preferredCluster: {{ acm_spokes[0] }}
+  retainNamespaceSCCAcrossPeers: true
+  protectedNamespaces: [{{ workload_namespace }}]
+  placementRef:
+    apiVersion: cluster.open-cluster-management.io/v1beta1
+    kind: Placement
+    name: {{ workload_name }}
+    namespace: openshift-dr-ops
+  drPolicyRef:
+    apiVersion: ramendr.openshift.io/v1alpha1
+    kind: DRPolicy
+    name: {{ regional_dr_policy_name }}
+  pvcSelector:
+    matchLabels:
+      ramendr.openshift.io/k8s-resource-selector: {{ workload_name }}
+  kubeObjectProtection:
+    captureInterval: 5m
+    recipeRef:
+      name: vm-recipe
+      namespace: openshift-dr-ops
+    recipeParameters:
+      PROTECTED_VMS: [{{ workload_name }}]
+      K8S_RESOURCE_SELECTOR: [{{ workload_name }}]
+      PVC_RESOURCE_SELECTOR: [{{ workload_name }}]

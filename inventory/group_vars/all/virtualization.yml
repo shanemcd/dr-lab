@@ -20,7 +20,6 @@ virtualization_csv_timeout_minutes: 20
 virtualization_hco_timeout_minutes: 30
 virtualization_settle_delay_seconds: 15
 
-# This Ampere host cannot expose nested KVM. Explicit upstream HCO lab mode,
-# via Subscription env (not a patch to operator-owned KubeVirt/CSV objects).
-# This does NOT establish Red Hat support or successful ARM64 TCG execution.
-virtualization_use_emulation: true
+# Real VM execution requires nested hardware virtualization on the managed sites.
+# Do not use software emulation to mask a failed host preflight.
+virtualization_use_emulation: false

@@ -7,6 +7,9 @@ ansible_collections/*
 __pycache__/
 *.pyc
 .cache/
+.venv/
+local.yml
+local.yaml
 
 # Local/editor files
 .DS_Store
@@ -17,9 +20,12 @@ __pycache__/
 *.ign
 install-config.yaml
 install-config.yml
+install-config.yaml.*
+install-config.yml.*
 .openshift_install*
 kubeconfig
 kubeconfig.*
+*.kubeconfig
 *-kubeconfig
 kubeadmin-password
 auth/

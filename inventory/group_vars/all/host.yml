@@ -8,10 +8,11 @@ rhsm_password: ""
 rhsm_org_id: ""
 rhsm_activationkey: ""
 
-# Host packages ensured by host_prep (var-driven). aarch64 additions:
-# qemu-system-aarch64 (the distro emulator — no CXL backports needed in
-# this lab) and edk2-aarch64 (AAVMF UEFI firmware for arm64 guests).
-host_packages:
+# Common packages plus native QEMU and UEFI firmware for the host distribution.
+host_packages: >-
+  {{ host_common_packages + lab_arch_profile[
+     'fedora_packages' if lab_host_distribution == 'Fedora' else 'rhel_packages'] }}
+host_common_packages:
   - chrony
   - tar
   - podman
@@ -27,8 +28,7 @@ host_packages:
   - libvirt-daemon-driver-network
   - psmisc
   - coreos-installer
-  - qemu-system-aarch64
-  - edk2-aarch64
+  - firewalld
 
 # Python library required on the host by kubernetes.core modules.
-python_kubernetes_package: "kubernetes"
+python_kubernetes_package: "python3-kubernetes"

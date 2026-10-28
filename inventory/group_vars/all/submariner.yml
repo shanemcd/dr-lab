@@ -2,6 +2,7 @@
 # The two spoke pod/service CIDRs are distinct: do not enable Globalnet.
 submariner_clusterset: dr-sites
 submariner_health_retries: 120
-# ARM64 digest verified by the live application probe (not a floating tag).
+# Multi-architecture index (amd64/arm64 children verified); not a floating tag.
+# Native x86 application traffic passed; historical ARM probe scope is separate.
 submariner_probe_image: >-
   registry.access.redhat.com/ubi9/python-312@sha256:105e70cb265e82beef1687b87b77444a05b410c55d8631e9aa9aa6804fcca45d

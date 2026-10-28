@@ -5,8 +5,8 @@
 - name: Hand root-owned lab artifacts back to the workspace owner
   ansible.builtin.shell: |
     set -o pipefail
-    find {{ item }} -user root -print0 |
-      xargs -0 -r chown {{ lab_workspace_identity.uid }}:{{ lab_workspace_identity.gid }}
+    find {{ item | quote }} -user root -print0 |
+      xargs -0 -r chown -h -- {{ lab_workspace_identity.uid }}:{{ lab_workspace_identity.gid }}
   loop:
     - "{{ install_base_dir }}"
     - "{{ vm_assets_dir }}"

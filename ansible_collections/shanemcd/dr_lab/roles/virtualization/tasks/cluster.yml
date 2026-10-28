@@ -155,6 +155,30 @@
   changed_when: false
   when: virtualization_use_emulation | bool
 
+- name: Require native KubeVirt execution configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - kubevirt
+      - '-n'
+      - "{{ virtualization_namespace }}"
+      - '-o'
+      - json
+      - '--request-timeout=30s'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: virtualization_native_observed
+  until: >-
+    virtualization_native_observed.rc == 0 and
+    (virtualization_native_observed.stdout | from_json)['items'] | length == 1 and
+    not ((virtualization_native_observed.stdout | from_json)['items'][0].spec
+    .get('configuration', {}).get('developerConfiguration', {}).get('useEmulation', false) | bool)
+  retries: 30
+  delay: 10
+  changed_when: false
+  when: not virtualization_use_emulation | bool
+
 - name: Let the virt deployment fleet settle
   ansible.builtin.command:
     argv:
@@ -188,6 +212,33 @@
   loop: "{{ (virtualization_deployments.stdout | from_json)['items'] }}"
   loop_control:
     label: "{{ item.metadata.name }}"
+
+# Extended resources are integer quantities; the API serializes 1000 as "1k".
+# Accept positive integer SI/binary forms, not missing/zero/negative capacities.
+- name: Require allocatable KVM on every managed node
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - node
+      - "{{ item.name }}"
+      - '-o'
+      - json
+      - '--request-timeout=30s'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  loop: "{{ lab_nodes | selectattr('cluster', 'equalto', cluster_name) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: virtualization_node_kvm
+  until: >-
+    virtualization_node_kvm.rc == 0 and
+    ((virtualization_node_kvm.stdout | from_json).status.get('allocatable', {})
+    .get('devices.kubevirt.io/kvm', '0') | string | regex_search('^[1-9][0-9]*([kMGTPE]i?)?$')) is not none
+  retries: 30
+  delay: 10
+  changed_when: false
+  when: not virtualization_use_emulation | bool
 
 - name: Cluster virtualization summary
   ansible.builtin.debug:

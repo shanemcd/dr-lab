@@ -1,8 +1,9 @@
 ---
 # Lab network. lab_subnet_prefix is the source of truth; every address
 # derives as {{ lab_subnet_prefix }}.{{ <x>_suffix }} and never restates the
-# prefix. No load balancer and no VIPs: each SNO serves its own API and
-# (pinned) ingress on its own IP. Libvirt's dedicated dnsmasq listens on
+# prefix. The SNO hub serves its own API/ingress; compact sites use host
+# load-balancer VIPs. The address model requires an IPv4 /24.
+# Libvirt's dedicated dnsmasq listens on
 # the gateway — load-bearing because ignition fetches its config BEFORE
 # applying storage/files, so the initramfs must resolve api-int (via
 # DHCP-provided resolver) before the node's static keyfile exists.
@@ -52,8 +53,8 @@ network_hosts_block: >-
 # Convenience derivations (single source of truth = the suffixes above).
 lab_gateway_ip: "{{ lab_subnet_prefix }}.{{ host_gateway_suffix }}"
 
-# Guests cannot reach the host's corporate NTP servers directly. Relay
-# synchronized time, never advertise an unsynchronized local clock.
+# Relay synchronized host time to guests, which may not reach upstream NTP
+# directly. Never advertise an unsynchronized local clock.
 lab_chrony_config: |
   server {{ lab_gateway_ip }} iburst
   driftfile /var/lib/chrony/drift

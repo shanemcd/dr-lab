@@ -13,12 +13,14 @@
   # Read-only settle gate: verification asserts steady state, not a
   # momentary one. One poller over the whole operator table.
   ansible.builtin.shell: |
-    set -o pipefail
+    set -euo pipefail
     # cluster-api excluded: platform=None installs keep it Progressing
     # (Uninitialized) forever — upstream steady state, not a fault.
-    bad=$("{{ install_bin_dir }}/oc" get clusteroperators --no-headers 2>/dev/null \
-      | awk '$1 != "cluster-api" && ($3 != "True" || $5 == "True") {print $1"("$3"/"$5")"}' | grep . || true)
-    cv=$("{{ install_bin_dir }}/oc" get clusterversion \
+    operators=$({{ (install_bin_dir ~ '/oc') | quote }} get clusteroperators --no-headers)
+    [ -n "$operators" ] || { echo 'No cluster operators returned' >&2; exit 1; }
+    bad=$(printf '%s\n' "$operators" \
+      | awk '$1 != "cluster-api" && ($3 != "True" || $5 == "True") {print $1"("$3"/"$5")"}')
+    cv=$({{ (install_bin_dir ~ '/oc') | quote }} get clusterversion \
       -o 'jsonpath={.items[0].status.conditions[?(@.type=="Available")].status}' 2>/dev/null)
     if [ -n "${bad}" ] || [ "${cv}" != "True" ]; then
       echo "unsettled: operators not Available=${bad:-none} clusterversion Available=${cv}" >&2

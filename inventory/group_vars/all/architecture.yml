@@ -1,0 +1,22 @@
+---
+# Native virtualization only. workspace discovers the managed host on every entrypoint.
+lab_arch: "{{ lab_host_arch }}"
+ocp_arch: "{{ lab_arch }}"
+lab_arch_profiles:
+  x86_64:
+    machine: q35
+    console: ttyS0
+    kubevirt_arch: amd64
+    fedora_packages: [qemu-system-x86, edk2-ovmf]
+    rhel_packages: [qemu-kvm, edk2-ovmf]
+  aarch64:
+    machine: virt
+    console: ttyAMA0
+    kubevirt_arch: arm64
+    fedora_packages: [qemu-system-aarch64, edk2-aarch64]
+    rhel_packages: [qemu-kvm, edk2-aarch64]
+lab_arch_profile: "{{ lab_arch_profiles[lab_arch] }}"
+# RHEL uses its libexec emulator; Fedora provides the system emulator in /usr/bin.
+qemu_binary_path: >-
+  {{ '/usr/bin/qemu-system-' ~ lab_arch if lab_host_distribution == 'Fedora'
+     else '/usr/libexec/qemu-kvm' }}

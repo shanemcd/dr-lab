@@ -14,7 +14,7 @@ vms_disk_bootindex: 0
 vms_iso_kargs:
   - "ignition.platform.id=qemu"
   - "console=tty0"
-  - "console=ttyAMA0,115200n8"
+  - "console={{ lab_arch_profile.console }},115200n8"
 
 # Prepared boot-medium name (workspace copy; staged per node into
 # libvirt's runtime dir).
@@ -25,6 +25,4 @@ vms_boot_marker: "Linux version"
 vms_boot_marker_retries: 120
 vms_boot_marker_delay: 5
 
-# Distro emulator for aarch64 guests (Fedora package qemu-system-aarch64;
-# firmware via edk2-aarch64 — both ensured in host_packages).
-qemu_binary_path: "/usr/bin/qemu-system-aarch64"
+# Emulator and firmware package selection live in architecture.yml.

@@ -1,0 +1,12 @@
+---
+# Optional running-guest acceptance fixture, never the halted marker diagnostic.
+workload_namespace: dr-running-vm
+workload_name: fedora-dr
+workload_storage_class: ocs-storagecluster-ceph-rbd
+workload_disk_size: 20Gi
+# Native child manifests of quay.io/containerdisks/fedora:44, verified via HTTPS.
+# Pin children explicitly: never ask an importer to guess the guest architecture.
+workload_image_pins:
+  x86_64: sha256:1571d49ee43106e9c7cc4e9f487f6f885ee7c156dc5834fad87ad1e38768b778
+  aarch64: sha256:6ad8b75a658a05e8f0952778141921e1677f981e96f88237f417d7454435b9b5
+workload_image: "docker://quay.io/containerdisks/fedora@{{ workload_image_pins[lab_arch] }}"

@@ -1,0 +1,11 @@
+---
+# Optional, deliberate one-time acceptance fixture. Not part of infrastructure site.
+- name: Provision a native PVC-backed running guest on the primary site
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    running_vm_kubeconfig: "{{ install_base_dir }}/{{ acm_spokes[0] }}/auth/kubeconfig"
+  roles:
+    - role: shanemcd.dr_lab.workspace
+    - role: shanemcd.dr_lab.running_vm

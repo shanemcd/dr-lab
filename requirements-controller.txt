@@ -1,0 +1,4 @@
+# Supported controller baseline; external collections are in requirements.yml.
+ansible-core==2.19.14
+kubernetes==34.1.0
+PyYAML==6.0.3

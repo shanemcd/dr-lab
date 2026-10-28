@@ -1,0 +1,107 @@
+---
+- name: Check fixture namespace on BOTH sites before creating source resources
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, namespace, "{{ workload_namespace }}", --ignore-not-found, -o, name]
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ item }}/auth/kubeconfig"
+  loop: "{{ acm_spokes }}"
+  register: running_vm_existing
+  changed_when: false
+
+- name: Refuse to reseed an existing or recovered workload
+  ansible.builtin.assert:
+    that:
+      - running_vm_existing.results | map(attribute='stdout') | select('ne', '') | list | length == 0
+    fail_msg: >-
+      Fixture namespace already exists. Inspect both sites and DRPC before any
+      manual cleanup; never rerun provisioning after protection or recovery.
+
+- name: Read hub protection controls before provisioning
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, drplacementcontrols, -A, -o, json]
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: running_vm_controls
+  changed_when: false
+
+- name: Refuse provisioning into any protected namespace
+  ansible.builtin.assert:
+    that:
+      - >-
+        (running_vm_controls.stdout | from_json)['items']
+        | selectattr('spec.protectedNamespaces', 'defined')
+        | selectattr('spec.protectedNamespaces', 'contains', workload_namespace)
+        | list | length == 0
+    fail_msg: An existing DRPC protects this namespace; inspect recovery state instead of reseeding.
+
+- name: Read guest SSH public key
+  ansible.builtin.slurp:
+    src: "{{ install_ssh_pubkey_path }}"
+  register: running_vm_public_key
+
+- name: Create isolated fixture namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ running_vm_kubeconfig }}"
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ workload_namespace }}"
+
+- name: Import native boot disk and create running VM
+  kubernetes.core.k8s:
+    kubeconfig: "{{ running_vm_kubeconfig }}"
+    definition: "{{ lookup('template', 'workload.yml.j2') | from_yaml_all | list }}"
+
+- name: Wait for CDI import to finish
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - datavolume
+      - "{{ workload_name }}-root"
+      - -n
+      - "{{ workload_namespace }}"
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ running_vm_kubeconfig }}"
+  register: running_vm_import
+  until: >-
+    running_vm_import.rc == 0 and
+    ((running_vm_import.stdout | from_json).status.phase | default('')) == 'Succeeded'
+  retries: 120
+  delay: 10
+  changed_when: false
+
+- name: Label the actual imported PVC for Ramen selection
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - label
+      - pvc
+      - "{{ workload_name }}-root"
+      - -n
+      - "{{ workload_namespace }}"
+      - "ramendr.openshift.io/k8s-resource-selector={{ workload_name }}"
+      - --overwrite
+  environment:
+    KUBECONFIG: "{{ running_vm_kubeconfig }}"
+  changed_when: true
+
+- name: Require a Ready VMI with connected guest agent
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, vmi, "{{ workload_name }}", -n, "{{ workload_namespace }}", -o, json]
+  environment:
+    KUBECONFIG: "{{ running_vm_kubeconfig }}"
+  register: running_vm_status
+  until: >-
+    running_vm_status.rc == 0 and
+    ((running_vm_status.stdout | from_json).status.phase | default('')) == 'Running' and
+    ((running_vm_status.stdout | from_json).status.conditions | default([])
+    | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1) and
+    ((running_vm_status.stdout | from_json).status.conditions | default([])
+    | selectattr('type', 'equalto', 'AgentConnected') | selectattr('status', 'equalto', 'True') | list | length == 1)
+  retries: 90
+  delay: 10
+  changed_when: false

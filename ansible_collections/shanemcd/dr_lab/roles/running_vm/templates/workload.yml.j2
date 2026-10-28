@@ -1,0 +1,68 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: {{ workload_name }}-root
+  namespace: {{ workload_namespace }}
+spec:
+  source:
+    registry:
+      url: {{ workload_image | to_json }}
+      pullMethod: node
+  storage:
+    accessModes: [ReadWriteOnce]
+    volumeMode: Filesystem
+    storageClassName: {{ workload_storage_class }}
+    resources:
+      requests:
+        storage: {{ workload_disk_size }}
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ workload_name }}
+  namespace: {{ workload_namespace }}
+  labels:
+    ramendr.openshift.io/k8s-resource-selector: {{ workload_name }}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        ramendr.openshift.io/k8s-resource-selector: {{ workload_name }}
+    spec:
+      architecture: {{ lab_arch_profile.kubevirt_arch }}
+      domain:
+        cpu: {cores: 2, model: host-passthrough}
+        resources:
+          requests: {memory: 2Gi}
+        devices:
+          disks:
+            - name: root
+              disk: {bus: virtio}
+            - name: cloudinit
+              disk: {bus: virtio}
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: root
+          persistentVolumeClaim:
+            claimName: {{ workload_name }}-root
+        - name: cloudinit
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              users:
+                - name: labuser
+                  groups: [wheel]
+                  sudo: ['ALL=(ALL) NOPASSWD:ALL']
+                  lock_passwd: true
+                  ssh_authorized_keys:
+                    - {{ running_vm_public_key.content | b64decode | trim }}
+              ssh_pwauth: false
+              packages: [qemu-guest-agent]
+              runcmd:
+                - [systemctl, enable, --now, qemu-guest-agent]

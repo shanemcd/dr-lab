@@ -37,11 +37,11 @@
   # the auto-import secret after a successful import.
   ansible.builtin.shell: |
     set -o pipefail
-    {{ install_bin_dir }}/oc create secret generic auto-import-secret \
-      -n {{ acm_spoke_name }} \
-      --from-file=kubeconfig={{ install_base_dir }}/{{ acm_spoke_name }}/auth/kubeconfig \
+    {{ (install_bin_dir ~ '/oc') | quote }} create secret generic auto-import-secret \
+      -n {{ acm_spoke_name | quote }} \
+      {{ ('--from-file=kubeconfig=' ~ install_base_dir ~ '/' ~ acm_spoke_name ~ '/auth/kubeconfig') | quote }} \
       --dry-run=client -o yaml \
-      | {{ install_bin_dir }}/oc apply -f -
+      | {{ (install_bin_dir ~ '/oc') | quote }} apply -f -
   args:
     executable: /bin/bash
   environment:

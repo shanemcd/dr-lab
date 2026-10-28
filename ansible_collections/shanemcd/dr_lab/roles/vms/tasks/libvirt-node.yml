@@ -1,4 +1,25 @@
 ---
+# Check identity before touching any per-node runtime media or definitions.
+- name: Query the defined domain inventory
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", list, --all, --name]
+  register: vms_defined_domains
+  changed_when: false
+
+- name: Check whether this domain is defined
+  ansible.builtin.command:
+    argv: [virsh, -c, "{{ libvirt_uri }}", dominfo, "{{ node.name }}"]
+  register: vms_domain_info
+  changed_when: false
+  failed_when: vms_domain_info.rc != 0 and node.name in vms_defined_domains.stdout_lines
+  environment: {LC_ALL: C}
+
+- name: Refuse to overwrite an unrelated same-name domain
+  ansible.builtin.assert:
+    that: "(node.name | to_uuid) in vms_domain_info.stdout"
+    fail_msg: "Domain name is already in use with a different UUID; choose a different lab node name."
+  when: vms_domain_info.rc == 0
+
 - name: Create the private libvirt runtime directory
   ansible.builtin.file:
     path: "{{ libvirt_runtime_dir }}"
@@ -59,20 +80,6 @@
     dest: "{{ vm_run_dir }}/{{ node.name }}.xml"
     mode: '0644'
   register: vms_domain_xml
-
-- name: Check whether this domain is defined
-  ansible.builtin.command:
-    argv: [virsh, -c, "{{ libvirt_uri }}", dominfo, "{{ node.name }}"]
-  register: vms_domain_info
-  changed_when: false
-  failed_when: false
-  environment: {LC_ALL: C}
-
-- name: Refuse to overwrite an unrelated same-name domain
-  ansible.builtin.assert:
-    that: "(node.name | to_uuid) in vms_domain_info.stdout"
-    fail_msg: "Domain name is already in use with a different UUID; choose a different lab node name."
-  when: vms_domain_info.rc == 0
 
 - name: Define the lab domain
   ansible.builtin.command:

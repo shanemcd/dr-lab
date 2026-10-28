@@ -93,7 +93,7 @@
                 labels:
                   ramendr.openshift.io/k8s-resource-selector: {{ halted_name }}
               spec:
-                architecture: arm64
+                architecture: "{{ lab_arch_profile.kubevirt_arch }}"
                 domain:
                   cpu: {cores: 1, model: host-passthrough}
                   resources:

@@ -1,6 +1,7 @@
 """Exercise the real pre-ODF gate; PV affinity terms are OR alternatives."""
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -18,10 +19,9 @@ class StoragePVTests(unittest.TestCase):
         script = task["ansible.builtin.shell"].split("python3 -c '", 1)[1].rsplit("'", 1)[0]
         env = Environment()
         env.filters["to_json"] = json.dumps
-        script = env.from_string(script).render(
-            storage_lso_storageclass="localblock",
-            storage_members=[{"name": h} for h in ["m1", "m2", "m3"]],
-        )
+        script = env.from_string(script).render()
+        gate_env = dict(os.environ, DR_STORAGE_CLASS="localblock",
+                        DR_STORAGE_HOSTS=json.dumps(["m1", "m2", "m3"]))
 
         def term(*hosts):
             return {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": list(hosts)}]}
@@ -36,11 +36,18 @@ class StoragePVTests(unittest.TestCase):
 
         def check(items, success):
             result = subprocess.run([sys.executable, "-c", script],
-                                    input=json.dumps({"items": items}), text=True,
+                                    input=json.dumps({"items": items}), text=True, env=gate_env,
                                     capture_output=True, check=False)
             self.assertEqual(result.returncode == 0, success, result.stderr)
 
         check(good, True)
+        # Config is data, never Python/shell source (even for invalid API names).
+        unusual = copy.deepcopy(good)
+        gate_env["DR_STORAGE_CLASS"] = "class'$(false); weird"
+        for item in unusual:
+            item["spec"]["storageClassName"] = gate_env["DR_STORAGE_CLASS"]
+        check(unusual, True)
+        gate_env["DR_STORAGE_CLASS"] = "localblock"
         bound = copy.deepcopy(good)
         bound[0]["status"]["phase"] = "Bound"
         check(bound, True)

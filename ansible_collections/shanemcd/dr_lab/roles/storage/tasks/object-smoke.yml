@@ -57,7 +57,7 @@
 - name: Require issued bucket endpoint and credentials without logging secrets
   ansible.builtin.shell: |
     set -euo pipefail
-    {{ install_bin_dir }}/oc get configmap/object-provisioning-test secret/object-provisioning-test \
+    {{ (install_bin_dir ~ '/oc') | quote }} get configmap/object-provisioning-test secret/object-provisioning-test \
       -n dr-storage-smoke -o json | python3 -c '
     import json, sys
     objects = {item["kind"]: item.get("data", {}) for item in json.load(sys.stdin)["items"]}

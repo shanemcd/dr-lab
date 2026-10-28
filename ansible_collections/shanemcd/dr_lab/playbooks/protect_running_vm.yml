@@ -1,0 +1,166 @@
+---
+# Initial protection only. Never provisions, reseeds, relocates or promotes disks.
+- name: Protect the existing running fixture using the built-in VM recipe
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    running_vm_kubeconfig: "{{ install_base_dir }}/{{ acm_spokes[0] }}/auth/kubeconfig"
+    running_vm_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  roles:
+    - role: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Read existing protection controls
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, drplacementcontrols, -A, -o, json]
+      environment:
+        KUBECONFIG: "{{ running_vm_hub_kubeconfig }}"
+      register: running_vm_controls
+      changed_when: false
+
+    - name: Refuse to modify existing protection or recovery state
+      ansible.builtin.assert:
+        that:
+          - >-
+            (running_vm_controls.stdout | from_json)['items']
+            | selectattr('spec.protectedNamespaces', 'defined')
+            | selectattr('spec.protectedNamespaces', 'contains', workload_namespace)
+            | list | length == 0
+          - >-
+            (running_vm_controls.stdout | from_json)['items']
+            | selectattr('metadata.name', 'equalto', workload_name) | list | length == 0
+        fail_msg: Existing DRPC found; inspect its checkpoints and recovery state instead of reinitializing protection.
+
+    - name: Read any existing placement with the fixture name
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - get
+          - placement
+          - "{{ workload_name }}"
+          - -n
+          - openshift-dr-ops
+          - --ignore-not-found
+          - -o
+          - name
+      environment:
+        KUBECONFIG: "{{ running_vm_hub_kubeconfig }}"
+      register: running_vm_placement
+      changed_when: false
+
+    - name: Refuse to overwrite any existing placement
+      ansible.builtin.assert:
+        that: [running_vm_placement.stdout | length == 0]
+        fail_msg: Existing placement found; inspect prior protection attempts before any cleanup.
+
+    - name: Require fixture namespace absent on recovery site
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, namespace, "{{ workload_namespace }}", --ignore-not-found, -o, name]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ acm_spokes[1] }}/auth/kubeconfig"
+      register: running_vm_peer
+      changed_when: false
+
+    - name: Refuse initial protection over an existing peer namespace
+      ansible.builtin.assert:
+        that: [running_vm_peer.stdout | length == 0]
+        fail_msg: Inspect the peer namespace; never initialize over recovered resources.
+
+    - name: Read namespace SCC retention configuration
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, cm, ramen-hub-operator-config, -n, openshift-operators, -o, json]
+      environment:
+        KUBECONFIG: "{{ running_vm_hub_kubeconfig }}"
+      register: running_vm_security
+      changed_when: false
+
+    - name: Require supported namespace security retention
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((running_vm_security.stdout | from_json).data['ramen_manager_config.yaml']
+            | from_yaml).retainNamespaceSCCAcrossPeers | default(false) | bool
+        fail_msg: Enable supported namespace SCC retention through regional DR configuration first.
+
+    - name: Read source VMI
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, vmi, "{{ workload_name }}", -n, "{{ workload_namespace }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ running_vm_kubeconfig }}"
+      register: running_vm_source
+      changed_when: false
+
+    - name: Require a running agent-connected source guest before initial protection
+      ansible.builtin.assert:
+        that:
+          - (running_vm_source.stdout | from_json).status.phase == 'Running'
+          - >-
+            (running_vm_source.stdout | from_json).spec.volumes
+            | selectattr('persistentVolumeClaim', 'defined')
+            | selectattr('persistentVolumeClaim.claimName', 'equalto', workload_name + '-root')
+            | list | length == 1
+          - >-
+            (running_vm_source.stdout | from_json).status.conditions
+            | selectattr('type', 'equalto', 'Ready')
+            | selectattr('status', 'equalto', 'True') | list | length == 1
+          - >-
+            (running_vm_source.stdout | from_json).status.conditions
+            | selectattr('type', 'equalto', 'AgentConnected')
+            | selectattr('status', 'equalto', 'True') | list | length == 1
+
+    - name: Read the selected persistent source disk
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - get
+          - pvc
+          - "{{ workload_name }}-root"
+          - -n
+          - "{{ workload_namespace }}"
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ running_vm_kubeconfig }}"
+      register: running_vm_disk
+      changed_when: false
+
+    - name: Require a bound selected RBD disk
+      ansible.builtin.assert:
+        that:
+          - (running_vm_disk.stdout | from_json).status.phase == 'Bound'
+          - (running_vm_disk.stdout | from_json).spec.storageClassName == workload_storage_class
+          - >-
+            (running_vm_disk.stdout | from_json).metadata.labels['ramendr.openshift.io/k8s-resource-selector']
+            == workload_name
+
+    - name: Create discovered application placement and VM recipe control
+      kubernetes.core.k8s:
+        kubeconfig: "{{ running_vm_hub_kubeconfig }}"
+        definition: >-
+          {{ lookup('template', playbook_dir + '/../templates/running-vm-protection.yml.j2') | from_yaml_all | list }}
+
+    - name: Require generation-current protection plus disk and object checkpoints
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - --request-timeout=20s
+          - get
+          - drplacementcontrol
+          - "{{ workload_name }}"
+          - -n
+          - openshift-dr-ops
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ running_vm_hub_kubeconfig }}"
+      register: running_vm_drpc
+      until: >-
+        running_vm_drpc.rc == 0 and
+        ((running_vm_drpc.stdout | from_json).status.lastGroupSyncTime | default('') | length > 0) and
+        ((running_vm_drpc.stdout | from_json).status.lastKubeObjectProtectionTime | default('') | length > 0) and
+        ((running_vm_drpc.stdout | from_json).status.conditions | default([])
+        | selectattr('observedGeneration', 'equalto', (running_vm_drpc.stdout | from_json).metadata.generation)
+        | selectattr('type', 'equalto', 'Protected') | selectattr('status', 'equalto', 'True') | list | length == 1)
+      retries: 180
+      delay: 10
+      changed_when: false

@@ -68,10 +68,10 @@
 - name: Require one local block PV per selected node
   ansible.builtin.shell: |
     set -euo pipefail
-    {{ install_bin_dir }}/oc get pv -o json | python3 -c '
-    import json, sys
+    {{ (install_bin_dir ~ '/oc') | quote }} get pv -o json | python3 -c '
+    import json, os, sys
     pvs = [p for p in json.load(sys.stdin)["items"]
-           if p["spec"].get("storageClassName") == {{ storage_lso_storageclass | to_json }}
+           if p["spec"].get("storageClassName") == os.environ["DR_STORAGE_CLASS"]
            and p["status"]["phase"] in ("Available", "Bound")]
     assert len(pvs) == 3, "Expected exactly three usable localblock PVs"
     hosts = []
@@ -92,10 +92,12 @@
         assert len(pv_hosts) == 1, "PV alternatives must select the same host"
         hosts.append(pv_hosts.pop())
     assert len(set(hosts)) == 3, "Expected one disk per distinct host"
-    assert set(hosts) == set({{ storage_members | map(attribute='name') | list | to_json }}), hosts
+    assert set(hosts) == set(json.loads(os.environ["DR_STORAGE_HOSTS"])), hosts
     '
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
+    DR_STORAGE_CLASS: "{{ storage_lso_storageclass }}"
+    DR_STORAGE_HOSTS: "{{ storage_members | map(attribute='name') | list | to_json }}"
   register: storage_pvs_ready
   until: storage_pvs_ready.rc == 0
   retries: 120

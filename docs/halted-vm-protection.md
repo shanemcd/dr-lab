@@ -1,14 +1,15 @@
 # Halted VM diagnostic (not VM failover acceptance)
 
-The host's ARM64 nested-KVM/emulation blocker remains as documented in
-[hardware-blocker.md](hardware-blocker.md). This explicitly separate diagnostic
+The historical ARM64 host's nested-KVM/emulation blocker is recorded in
+[hardware-blocker.md](hardware-blocker.md); it is not the current x86_64 host.
+All runtime findings below concern those previous clusters. This separate diagnostic
 must not replace a running workload in `site.yml` or be counted as running-VM
 failover.
 
 Run from the repository root:
 
 ```sh
-ansible-playbook ansible_collections/shanemcd/dr_lab/playbooks/probe_halted_vm.yml
+ansible-playbook shanemcd.dr_lab.probe_halted_vm -e @local.yml
 ```
 
 It creates `dr-halted-probe/halted-marker` on the primary site: a **Halted** VM
@@ -68,7 +69,7 @@ subsequently passed separately; see [rebuild validation](rebuild-validation.md).
 The diagnostic evidence in this document predates that teardown and describes
 the previous clusters, not objects currently installed on the rebuilt sites.
 
-## Planned relocation diagnostic (iteration 25)
+## Historical planned relocation diagnostic
 
 `playbooks/relocate_halted_vm.yml` is also separate from `site.yml`. It requires
 both managed sites Available, no VMI in the diagnostic namespace on either site,
@@ -111,6 +112,7 @@ The corrected second exercise passed protection (`/tmp/dr-halted-v2-protection.l
 failed the strict source-PVC cleanup timeout (`/tmp/dr-halted-v2-relocation.log`).
 After that process finished, only the recovery verification portion was resumed
 with `--start-at-task 'Wait for the controller to finish planned relocation'`
+(a historical partial diagnostic, not a safe general resume recipe)
 and explicit `lab_user_home=/root`, namespace/name overrides. This partial run
 (`/tmp/dr-halted-v2-recovery-read.log`) passed 6 ok / 2 changed / 0 failed:
 current-generation source Secondary / target Primary, restored VM Halted,

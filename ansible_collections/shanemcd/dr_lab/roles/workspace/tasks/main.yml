@@ -1,4 +1,27 @@
 ---
+- name: Discover native host architecture and distribution
+  ansible.builtin.setup:
+    gather_subset: ["!all", "!min", architecture, distribution]
+  tags: [always]
+
+- name: Remember native platform
+  ansible.builtin.set_fact:
+    lab_host_arch: "{{ ansible_facts.architecture }}"
+    lab_host_distribution: "{{ ansible_facts.distribution }}"
+  tags: [always]
+
+- name: Require a supported native architecture
+  ansible.builtin.assert:
+    that:
+      - lab_arch in lab_arch_profiles
+      - lab_arch == lab_host_arch
+      - ocp_arch == lab_arch
+    fail_msg: >-
+      Supported native architectures are x86_64 and aarch64; detected
+      {{ lab_host_arch }}, requested {{ lab_arch }} / {{ ocp_arch }}.
+      Cross-architecture emulation is not a supported DR execution path.
+  tags: [always]
+
 # Resolve identity on the managed host without escalation, not from HOME's
 # basename or from root's gathered facts. lab_user is an optional override.
 - name: Resolve the lab workspace owner
