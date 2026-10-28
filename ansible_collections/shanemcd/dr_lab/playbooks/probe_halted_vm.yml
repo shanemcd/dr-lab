@@ -1,0 +1,251 @@
+---
+# Diagnostic only: never counts as running-VM acceptance or silently substitutes
+# for the full workload stage. The disk is raw, contains a marker, and has no OS.
+- name: Exercise halted VM object and disk protection without KVM
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    halted_namespace: dr-halted-probe
+    halted_name: halted-marker
+    halted_primary: "{{ acm_spokes[0] }}"
+    halted_kubeconfig: "{{ install_base_dir }}/{{ halted_primary }}/auth/kubeconfig"
+    halted_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  roles:
+    - role: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Read any previous diagnostic placement before touching source disks
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - get
+          - drplacementcontrol
+          - "{{ halted_name }}"
+          - -n
+          - openshift-dr-ops
+          - --ignore-not-found
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_previous
+      changed_when: false
+
+    - name: Refuse reseeding during or after a DR operation
+      ansible.builtin.assert:
+        that:
+          - >-
+            halted_previous.stdout | length == 0 or
+            (((halted_previous.stdout | from_json).spec.action | default('')) == '' and
+            ((halted_previous.stdout | from_json).spec.preferredCluster == halted_primary))
+        fail_msg: Inspect existing diagnostic DR state; never reseed after failover or relocation.
+
+    - name: Create an isolated marker disk and halted VM
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+        stdin: |
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: {{ halted_namespace }}
+          ---
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: {{ halted_name }}
+            namespace: {{ halted_namespace }}
+            labels:
+              ramendr.openshift.io/k8s-resource-selector: {{ halted_name }}
+          spec:
+            accessModes: [ReadWriteOnce]
+            volumeMode: Filesystem
+            storageClassName: ocs-storagecluster-ceph-rbd
+            resources:
+              requests: {storage: 1Gi}
+          ---
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: {{ halted_name }}
+            namespace: {{ halted_namespace }}
+            labels:
+              ramendr.openshift.io/k8s-resource-selector: {{ halted_name }}
+          spec:
+            runStrategy: Halted
+            template:
+              metadata:
+                labels:
+                  ramendr.openshift.io/k8s-resource-selector: {{ halted_name }}
+              spec:
+                architecture: arm64
+                domain:
+                  cpu: {cores: 1, model: host-passthrough}
+                  resources:
+                    requests: {memory: 512Mi}
+                  devices:
+                    disks:
+                      - name: marker
+                        disk: {bus: virtio}
+                volumes:
+                  - name: marker
+                    persistentVolumeClaim:
+                      claimName: {{ halted_name }}
+      environment:
+        KUBECONFIG: "{{ halted_kubeconfig }}"
+      register: halted_apply
+      changed_when: "'created' in halted_apply.stdout or 'configured' in halted_apply.stdout"
+
+    - name: Seed a raw disk with a durable marker using an unprivileged pod
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+        stdin: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: marker-writer
+            namespace: {{ halted_namespace }}
+          spec:
+            restartPolicy: Never
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: writer
+                image: {{ submariner_probe_image }}
+                command: [python3, '-c']
+                args:
+                  - |
+                    import os
+                    path = '/disk/disk.img'
+                    marker = b'dr-lab-halted-marker-v1\n'
+                    if not os.path.exists(path):
+                        with open(path, 'xb') as f:
+                            f.truncate(64 * 1024 * 1024)
+                            f.seek(1024 * 1024)
+                            f.write(marker)
+                            f.flush()
+                            os.fsync(f.fileno())
+                    with open(path, 'rb') as f:
+                        f.seek(1024 * 1024)
+                        assert f.read(len(marker)) == marker, 'existing disk marker mismatch'
+                    print('HALTED_MARKER_VERIFIED')
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities: {drop: [ALL]}
+                resources:
+                  requests: {cpu: 20m, memory: 64Mi}
+                  limits: {memory: 128Mi}
+                volumeMounts:
+                  - {name: disk, mountPath: /disk}
+            volumes:
+              - name: disk
+                persistentVolumeClaim:
+                  claimName: {{ halted_name }}
+      environment:
+        KUBECONFIG: "{{ halted_kubeconfig }}"
+      register: halted_writer_apply
+      changed_when: "'created' in halted_writer_apply.stdout or 'configured' in halted_writer_apply.stdout"
+
+    - name: Require durable marker creation
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, pod, marker-writer, -n, "{{ halted_namespace }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ halted_kubeconfig }}"
+      register: halted_writer
+      until: >-
+        halted_writer.rc == 0 and
+        (halted_writer.stdout | from_json).status.phase == 'Succeeded'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Unmount the marker volume before protection
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - pod
+          - marker-writer
+          - -n
+          - "{{ halted_namespace }}"
+          - --wait=true
+          - --timeout=120s
+      environment:
+        KUBECONFIG: "{{ halted_kubeconfig }}"
+      changed_when: true
+
+    - name: Create the discovered-application placement and built-in VM recipe control
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+        stdin: |
+          apiVersion: cluster.open-cluster-management.io/v1beta1
+          kind: Placement
+          metadata:
+            name: {{ halted_name }}
+            namespace: openshift-dr-ops
+            annotations:
+              cluster.open-cluster-management.io/experimental-scheduling-disable: 'true'
+          spec:
+            predicates: []
+          ---
+          apiVersion: ramendr.openshift.io/v1alpha1
+          kind: DRPlacementControl
+          metadata:
+            name: {{ halted_name }}
+            namespace: openshift-dr-ops
+          spec:
+            preferredCluster: {{ halted_primary }}
+            protectedNamespaces: [{{ halted_namespace }}]
+            placementRef:
+              apiVersion: cluster.open-cluster-management.io/v1beta1
+              kind: Placement
+              name: {{ halted_name }}
+              namespace: openshift-dr-ops
+            drPolicyRef:
+              apiVersion: ramendr.openshift.io/v1alpha1
+              kind: DRPolicy
+              name: {{ regional_dr_policy_name }}
+            pvcSelector:
+              matchLabels:
+                ramendr.openshift.io/k8s-resource-selector: {{ halted_name }}
+            kubeObjectProtection:
+              captureInterval: 5m
+              recipeRef:
+                name: vm-recipe
+                namespace: openshift-dr-ops
+              recipeParameters:
+                PROTECTED_VMS: [{{ halted_name }}]
+                K8S_RESOURCE_SELECTOR: [{{ halted_name }}]
+                PVC_RESOURCE_SELECTOR: [{{ halted_name }}]
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_protect
+      changed_when: "'created' in halted_protect.stdout or 'configured' in halted_protect.stdout"
+
+    - name: Wait for halted application protection readiness
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - --request-timeout=20s
+          - get
+          - drplacementcontrol
+          - "{{ halted_name }}"
+          - -n
+          - openshift-dr-ops
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_drpc
+      until: >-
+        halted_drpc.rc == 0 and
+        ((halted_drpc.stdout | from_json).status.lastGroupSyncTime | default('') | length > 0) and
+        ((halted_drpc.stdout | from_json).status.lastKubeObjectProtectionTime | default('') | length > 0) and
+        ((halted_drpc.stdout | from_json).status.conditions | default([])
+        | selectattr('observedGeneration', 'equalto', (halted_drpc.stdout | from_json).metadata.generation)
+        | selectattr('type', 'equalto', 'Protected')
+        | selectattr('status', 'equalto', 'True') | list | length == 1)
+      retries: 180
+      delay: 10
+      changed_when: false

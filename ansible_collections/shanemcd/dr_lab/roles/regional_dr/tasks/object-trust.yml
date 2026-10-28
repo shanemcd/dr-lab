@@ -1,0 +1,96 @@
+---
+# ODF 4.22 guide 4.16.1 step 3 explicitly requires caCertificates on each
+# S3 profile for discovered-app Velero backups. Proxy trust alone is insufficient.
+- name: Read the hub custom CA union
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - configmap
+      - "{{ dr_trust_bundle_name }}"
+      - -n
+      - openshift-config
+      - -o
+      - 'jsonpath={.data.ca-bundle\.crt}'
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_object_ca
+  changed_when: false
+
+- name: Require the configured CA bundle
+  ansible.builtin.assert:
+    that:
+      - "'-----BEGIN CERTIFICATE-----' in regional_dr_object_ca.stdout"
+
+- name: Read the operator-generated hub configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - configmap
+      - ramen-hub-operator-config
+      - -n
+      - openshift-operators
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  register: regional_dr_object_config
+  changed_when: false
+
+- name: Preserve configuration and add documented S3 profile trust
+  ansible.builtin.set_fact:
+    regional_dr_object_original: >-
+      {{ ((regional_dr_object_config.stdout | from_json).data['ramen_manager_config.yaml'] | from_yaml) }}
+
+- name: Merge only the CA field into existing S3 profiles
+  ansible.builtin.set_fact:
+    regional_dr_object_profiles: >-
+      {{ regional_dr_object_original.s3StoreProfiles
+      | map('combine', {'caCertificates': regional_dr_object_ca.stdout | b64encode}) | list }}
+
+- name: Configure supported Ramen object-backup certificate trust
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - patch
+      - configmap
+      - ramen-hub-operator-config
+      - -n
+      - openshift-operators
+      - --type=merge
+      - -p
+      - "{{ {'data': {'ramen_manager_config.yaml': regional_dr_object_updated | to_nice_yaml}} | to_json }}"
+  vars:
+    regional_dr_object_updated: >-
+      {{ regional_dr_object_original | combine({'s3StoreProfiles': regional_dr_object_profiles}) }}
+  environment:
+    KUBECONFIG: "{{ regional_dr_hub_kubeconfig }}"
+  when: regional_dr_object_original.s3StoreProfiles != regional_dr_object_profiles
+  changed_when: true
+
+- name: Wait for normal operator propagation of S3 profile trust to each site
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - --request-timeout=20s
+      - get
+      - configmap
+      - ramen-dr-cluster-operator-config
+      - -n
+      - openshift-dr-system
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ item }}/auth/kubeconfig"
+  register: regional_dr_object_spoke_config
+  until: >-
+    regional_dr_object_spoke_config.rc == 0 and
+    (((regional_dr_object_spoke_config.stdout | from_json).data['ramen_manager_config.yaml']
+    | from_yaml).s3StoreProfiles
+    | selectattr('caCertificates', 'defined')
+    | selectattr('caCertificates', 'equalto', regional_dr_object_ca.stdout | b64encode) | list | length == 2)
+  retries: 120
+  delay: 10
+  changed_when: false
+  loop: "{{ acm_spokes }}"

@@ -73,3 +73,6 @@
   loop: "{{ acm_spokes }}"
   loop_control:
     loop_var: regional_dr_site
+
+- name: Configure documented certificate trust for discovered application backups
+  ansible.builtin.import_tasks: object-trust.yml
