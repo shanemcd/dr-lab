@@ -30,6 +30,9 @@
   environment:
     KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
   register: submariner_join
+  until: submariner_join.rc == 0
+  retries: 60
+  delay: 10
   changed_when: "'not labeled' not in submariner_join.stdout"
 
 - name: Configure and enable the spoke Submariner add-on
@@ -48,8 +51,14 @@
       metadata:
         name: submariner
         namespace: {{ submariner_spoke }}
-      spec: {}
+      spec:
+        # ACM 2.17 Networking 1.4.21: although deprecated, this field
+        # remains required; the generic add-on default targets the wrong NS.
+        installNamespace: submariner-operator
   environment:
     KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
   register: submariner_addon
+  until: submariner_addon.rc == 0
+  retries: 60
+  delay: 10
   changed_when: "'created' in submariner_addon.stdout or 'configured' in submariner_addon.stdout"
