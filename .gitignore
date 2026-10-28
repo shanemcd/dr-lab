@@ -11,7 +11,30 @@ __pycache__/
 # Local/editor files
 .DS_Store
 
-# transient run logs (local only)
-site-run.log
-tardown-run.log
-teardown-run.log
+# Runtime logs and generated installation state (may contain credentials)
+*.log
+*.retry
+*.ign
+install-config.yaml
+install-config.yml
+.openshift_install*
+kubeconfig
+kubeconfig.*
+*-kubeconfig
+kubeadmin-password
+auth/
+
+# Local credentials: inventory/group_vars/all/secrets.yml contains paths only
+pull-secret*
+*pull-secret*.json
+*pull-secret*.txt
+secrets/
+*.pem
+*.key
+id_rsa*
+id_ecdsa*
+id_ed25519*
+lab_ed25519*
+.env
+.env.*
+!.env.example

@@ -35,6 +35,13 @@ Its cleanup and filesystem-security findings are documented, not counted as a
 running-VM failover pass. No production-support claim is made for this nested
 ARM64 lab.
 
+## License and provenance
+
+[GPL-3.0-or-later](LICENSE). The collection follows conventions ported from
+[cxl-lab](https://github.com/shanemcd/cxl-lab), also GPL-licensed. Registry
+credentials, OpenShift installation assets and third-party collections are not
+included; obtain dependencies and subscriptions separately as required.
+
 Design references:
 - [Regional DR](docs/regional-dr-design.md)
 - [Standard compact-cluster storage](docs/compact-storage-design.md)

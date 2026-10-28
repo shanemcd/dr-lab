@@ -6,10 +6,10 @@ readme: README.md
 authors:
   - Shane McDonald <me@shanemcd.com>
 description: >-
-  Three single-node OpenShift clusters (SNOs) on one libvirt host — the
-  foundation of a disaster-recovery lab: hub, primary, and recovery
-  clusters with per-cluster DNS, networking, and bootstrap-in-place
-  installs on aarch64.
+  Regional disaster-recovery lab on one aarch64 libvirt host: an ACM
+  hub SNO and two three-master compact OpenShift clusters, with replicated
+  ODF, Submariner, GitOps/OADP, and managed regional-DR policy and peering.
+  Test-only infrastructure; running-VM failover remains unverified.
 license:
   - GPL-3.0-or-later
 tags:

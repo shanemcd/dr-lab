@@ -1,73 +1,50 @@
-# dr-lab rebuild: real compact clusters, one-shot bring-up, no hacks
+# DR lab plan and acceptance status
 
-Mission (user, 2025-10-28): bring up the ENTIRE lab in one shot with no hacks;
-grow SNOs into real clusters where needed; teardown + one-shot redeploy must
-work; once DR is deployed, create a test VM and perform a failover.
+This replaces the original implementation sketch. Inventory and playbooks are
+now implemented; historical sketches in Git history are not current instructions.
 
-## Why rebuild
+## Implemented topology
 
-Internal (compact single-node) ODF on ODF 4.22 requires an ocs-operator env hack
-(`SINGLE_NODE=true`) and hits an upstream-fixed bug in release-4.22
-(`GetKeyValues("osd")` returns "" -> invalid OSD topologySpreadConstraints; fixed
-in release-4.23+). Rather than patch operator images, we move to the fully
-supported topology.
+- `dr-hub`: ACM hub SNO, bootstrap-in-place, 12 vCPU / 40 GiB / 160 GiB root.
+- `dr-primary` and `dr-recovery`: three schedulable masters each, real UPI
+  installation with temporary bootstrap guests and ownership-guarded removal.
+- Each master: 20 vCPU / 40 GiB / 120 GiB root + dedicated 120 GiB ODF disk.
+- Two temporary bootstraps: 4 vCPU / 16 GiB / 60 GiB each.
+- Steady budget: 132 vCPU, 280 GiB RAM, 1,600 GiB virtual root/data capacity.
+  Bootstrap peak: 140 vCPU, 312 GiB RAM, 1,720 GiB virtual capacity, plus host
+  headroom. Thin allocation is not a substitute for capacity planning.
+- Default network: `192.168.126.0/24`; hub `.11`, primary VIP `.12` and masters
+  `.13`–`.15`, recovery VIP `.16` and masters `.17`–`.19`, bootstraps `.21`/`.22`.
+  Actual settings live in `inventory/group_vars/all/`.
 
-## Target architecture
+## Completed infrastructure acceptance
 
-- **dr-hub**: stays SNO (BiP). Runs ACM only; no ODF. No VIPs (unchanged).
-- **dr-primary, dr-recovery**: **3-master compact clusters** (compute replicas 0,
-  masters schedulable). Real UPI flow:
-  - bootstrap VM (temporary) + 3 master VMs per cluster
-  - haproxy on the lab host, per-cluster API VIP on the lab bridge:
-    6443 + 22623 -> bootstrap during install, -> masters after; 80/443 -> masters
-  - masters boot RHCOS ISO with per-node ignition baked via fw_cfg
-    (master.ign merged with per-node NM keyfile/hostname — same merge machinery
-    as the BiP path; no MCS dependency at boot)
-  - wait-for bootstrap-complete, destroy bootstrap, reconfigure LB, converge,
-    approve CSRs
-- **Storage (real ODF)**: each compact node gets a second virtio disk (data).
-  LSO discovery + LocalVolume (`localblock`) on /dev/vdb, ODF subscription,
-  StorageCluster internal mode with device sets on localblock, failureDomain
-  host. No env hacks, no operator patches.
-- **DR**: RamenDR Regional-DR — ODR hub operator on dr-hub, ramen-dr-cluster
-  operator + ODF on both managed clusters, mirror peer, DRPolicy,
-  VolumeReplicationClass (RBD mirroring), VolumeSnapshotClass, DRPlacementControl
-  apps.
-- **Test**: OpenShift Virtualization VM on dr-primary protected by DR, failover
-  to dr-recovery.
+- [x] Pinned OpenShift 4.22.16 ARM64 artifacts, fresh ignition and time relay.
+- [x] Core install, exact Ready membership, schedulable masters, safe bootstrap cleanup.
+- [x] Virtualization operator gates, full ACM hub, managed-cluster add-ons.
+- [x] Standard replicated three-node ODF, RBD and object provisioning.
+- [x] Submariner and real cross-site HTTP/authenticated TLS S3 exchange.
+- [x] GitOps/OADP prerequisites and supported CA configuration.
+- [x] Managed regional-DR policy, peering, mirroring and operator rollout gates.
+- [x] Full teardown + single untagged infrastructure deployment, without manual
+  recovery/retry: 2026-10-28, 756 ok / 220 changed / 0 failed / 0 rescued / 0 ignored.
+- [x] Final core-state and seven-guest clock verification; private evidence retained.
 
-## Resource budget (host: 160 cores, 501 GiB, ~1.8 TB free)
+See [rebuild validation](docs/rebuild-validation.md) for evidence and limitations.
+This is a test-only deployment, not certification of a supported production DR
+architecture or independent physical failure domains.
 
-| VM | count | vCPU | RAM | disks |
-|----|-------|------|-----|-------|
-| dr-hub (SNO) | 1 | 12 | 40G | 200G |
-| master (compact) | 6 | 10 | 40G | 120G root + 120G data |
-| bootstrap (transient, 1 per install) | 1 | 4 | 16G | 60G |
+## Remaining mandatory acceptance
 
-Steady: ~72 vCPU, ~280G RAM, ~1.7 TB. Fits.
+- [ ] Execute a minimal stock PVC-backed VM, observe Running and Ready.
+- [ ] Protect its disk/object state and perform actual unplanned failover with
+  real source isolation/fencing, then verify recovery execution and disk data.
 
-## IP plan (single /24, 192.168.126.0/24 — unchanged network role)
+These remain blocked by the tested host's nested ARM virtualization limitations
+and the stock ARM64 admission/TCG CPU-mode conflict. Preserve the healthy lab
+pending compatible hardware; do not redeploy or bypass validation to hide the
+blocker. The separate halted-VM diagnostic is not a substitute and retains a
+historical unresolved source-PVC cleanup failure.
 
-- .11  dr-hub (SNO, BiP — no VIP)
-- .12  dr-primary API/ingress VIP (on bridge, haproxy)
-- .13-.15 dr-primary masters
-- .16  dr-recovery API/ingress VIP
-- .17-.19 dr-recovery masters
-- .21/.22 bootstrap nodes (transient, DHCP reservations)
-
-## Work phases
-
-1. topology.yml redesign (clusters w/ node lists, VIPs, bootstrap specs)
-2. network: VIP bridge addresses, DNS api/api-int/apps -> VIP per compact cluster
-3. loadbalancer role: haproxy (systemd container or host package) per cluster,
-   bootstrap/masters mode switch
-4. install_config: multi-node path (manifests, bootstrap.ign, per-master
-   ignition merge), keep BiP path for hub
-5. vms: data disks on masters, bootstrap VM lifecycle
-6. cluster_install: bootstrap-complete, LB switch, CSR approval, convergence
-7. storage layer rewrite (LSO + real ODF)
-8. acm layer adapt (unchanged hub)
-9. virtualization layer (exists — 07) re-verify
-10. dr layer: RamenDR per upstream docs
-11. test VM + failover runbook/verification
-12. full teardown + one-shot redeploy verification, docs, commit
+See [hardware blocker and handoff](docs/hardware-blocker.md) for the remaining
+sequence. No full mission completion is claimed.

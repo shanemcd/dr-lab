@@ -1,78 +1,96 @@
-# dr-lab
+# shanemcd.dr_lab
 
-Three single-node OpenShift (SNO) clusters on one libvirt host — the
-foundation of a disaster-recovery lab: an ACM **hub**, a **primary**, and
-a **recovery** cluster, each its own cluster domain, pod/service CIDRs,
-and bootstrap-in-place (BiP) install. Targets the Fedora aarch64
-(Ampere) lab host with distribution QEMU + edk2 firmware.
+Ansible collection for a **test-only** regional disaster-recovery lab on a
+Fedora aarch64 libvirt host, using distribution QEMU and edk2 firmware.
+The current topology is an ACM hub SNO plus two three-master compact OpenShift
+clusters: seven steady guests and two temporary UPI bootstrap guests.
 
 Ported from [cxl-lab](https://github.com/shanemcd/cxl-lab) conventions:
-numbered playbook pipeline, taxonomy-driven group_vars, checksum-pinned
-GA artifacts, fresh-window ignition gating, and reverse-layer teardown.
+numbered playbooks, taxonomy-driven group variables, checksum-pinned artifacts,
+fresh-window ignition gating, and ownership-guarded teardown.
 
-## Topology
+## Topology and capacity
 
-| Node     | Role    | Cluster domain       | IP (default net 192.168.126.0/24) |
-| -------- | ------- | -------------------- | --------------------------------- |
-| `hub`    | SNO/ACM | `hub.ocp.lab`        | 192.168.126.10                    |
-| `primary`| SNO     | `primary.ocp.lab`    | 192.168.126.11                    |
-| `recovery`| SNO    | `recovery.ocp.lab`   | 192.168.126.12                    |
+| Cluster | Role | Domain | Addresses on 192.168.126.0/24 |
+| --- | --- | --- | --- |
+| `dr-hub` | SNO / ACM | `dr-hub.ocp.lab` | node `.11` |
+| `dr-primary` | Three-master compact / ODF | `dr-primary.ocp.lab` | API/ingress VIP `.12`, nodes `.13`–`.15` |
+| `dr-recovery` | Three-master compact / ODF | `dr-recovery.ocp.lab` | API/ingress VIP `.16`, nodes `.17`–`.19` |
 
-- OpenShift **4.22 GA** (pinned `ocp_version` in
-  `inventory/group_vars/all/versions.yml`), aarch64 mirror + RHCOS
-  `rhel-9` stream ISO, checksums cross-checked on every run.
-- Per cluster: api/api-int + concrete route + wildcard `*.apps` DNS
-  records (libvirt dnsmasq + host `/etc/hosts`), unique pod/service
-  CIDRs (see `topology.yml`).
-- Each SNO: BiP install (live ISO + blank virtio target + fw_cfg
-  ignition), one persistent libvirt domain, autostart with the lab
-  network.
+- OpenShift **4.22.16 aarch64**, RHCOS `rhel-9` ISO, pinned checksums.
+- Hub: 12 vCPU, 40 GiB RAM, 160 GiB root disk; bootstrap-in-place installation.
+- Each spoke master: 20 vCPU, 40 GiB RAM, 120 GiB root + dedicated 120 GiB ODF disk.
+- Each temporary bootstrap: 4 vCPU, 16 GiB RAM, 60 GiB disk; addresses `.21`/`.22`.
+- Budget: 132 vCPU / 280 GiB RAM steady, 140 vCPU / 312 GiB with both bootstraps,
+  plus host headroom. This was tested on a 160-core, 501 GiB host.
+- Each cluster has distinct pod/service CIDRs. Dedicated host HAProxy serves
+  compact-cluster API/MCS and ingress VIPs; libvirt supplies lab DNS/networking.
+- Compact clusters use real UPI bootstrap completion before the playbook switches
+  load-balancer backends and removes ownership-verified temporary domains.
+
+Authoritative settings are in the repository's `inventory/group_vars/all/`.
 
 ## Usage
 
+Run from the repository root. Review inventory, capacity, networking, package
+changes and destructive teardown behavior before execution. Host preparation
+requires privilege. Supply a valid registry pull secret as a mode-0600 file;
+`install_pull_secret_path` defaults to `/root/pull-secret.txt`. Never commit it.
+
 ```bash
-# One-time: collections + a pull secret at ~/pull-secret.txt
 ansible-galaxy collection install -p . -r requirements.yml
 
-# Full pipeline (host prep → artifacts → network → ignition → VMs →
-# cluster install → verify)
+# Full infrastructure: host, artifacts, network, load balancer, ignition, VMs,
+# cluster installation, virtualization, ACM, storage, Submariner,
+# GitOps/OADP prerequisites, regional DR, and final verification.
 ansible-playbook shanemcd.dr_lab.site
 
-# Or stage by stage
-ansible-playbook shanemcd.dr_lab.01_host_prep
-ansible-playbook shanemcd.dr_lab.02_artifacts
-ansible-playbook shanemcd.dr_lab.03_network
-ansible-playbook shanemcd.dr_lab.04_ignition
-ansible-playbook shanemcd.dr_lab.05_snos
-ansible-playbook shanemcd.dr_lab.06_install
-ansible-playbook shanemcd.dr_lab.07_virtualization
-ansible-playbook shanemcd.dr_lab.08_acm
+# Core installation only, or individual numbered stages 01 through 12
+ansible-playbook shanemcd.dr_lab.core
+ansible-playbook shanemcd.dr_lab.09_storage
+ansible-playbook shanemcd.dr_lab.10_submariner
+ansible-playbook shanemcd.dr_lab.11_dr_prerequisites
+ansible-playbook shanemcd.dr_lab.12_regional_dr
 
-# Checks + evidence report
+# Core-state and clock checks; add-on stages have their own gates
 ansible-playbook shanemcd.dr_lab.verify
 
-# Reverse-layer teardown (all, or --tags acm|virtualization|vms|network|artifacts|install-data)
+# DESTRUCTIVE: removes the lab using guarded reverse-layer teardown
 ansible-playbook shanemcd.dr_lab.teardown
 ```
 
-Consoles: `https://console-openshift-console.apps.<node>.ocp.lab`
-(kubeconfigs under `~/ocp-install-dr/<node>/auth/`).
+Consoles: `https://console-openshift-console.apps.<cluster>.ocp.lab`.
+Kubeconfigs default to `~/ocp-install-dr/<cluster>/auth/kubeconfig`, resolved for
+the workspace account; access credentials and runtime reports stay outside Git.
+Ignition has a limited certificate window; stale or partial installation state
+fails with teardown guidance rather than silently reusing invalid assets.
 
-## Layout
+## Verified scope and limitations
 
-- `inventory/group_vars/all/` — taxonomy: `host`, `network`, `paths`,
-  `topology`, `versions`, `secrets`.
-- `ansible_collections/shanemcd/dr_lab/roles/` — `workspace`, `host_prep`,
-  `artifacts`, `network`, `install_config`, `vms`, `cluster_install`,
-  `virtualization`, `teardown`, `verify`.
-- Idempotent, check-mode-friendly; teardown reverses exactly the host
-  changes the pipeline makes.
+A full teardown followed by a single untagged infrastructure deployment passed
+on 2026-10-28: **756 ok, 220 changed, 0 failed, 0 rescued, 0 ignored**. This includes
+storage provisioning, real cross-site HTTP/S3 probes, DR peering/policy, and final
+cluster/clock gates, without manual recovery or stage retries.
 
-## Notes
+**Running-VM execution and actual failover are not verified.** The tested Ampere
+Altra host cannot expose nested KVM to its OpenShift guests. The tested stock
+ARM64 emulation path also fails because admission requires a CPU mode that cannot
+execute with TCG. Operator readiness is not a VM execution pass. Suitable hardware
+is needed to finish acceptance; no production-support claim is made for this lab.
 
-- Ignition is generated at most once per 12 h window (MCS certificate
-  validity); a stale/partial state fails with teardown guidance.
-- The libvirt network refuses teardown while guest ports are attached —
-  tear down the `vms` layer first.
-- DR content (ACM, Ceph, RamenDR) comes in later phases; this repo is
-  phase 1: three converged SNOs.
+The separate halted-VM probe/relocation playbooks are diagnostics, not part of
+`site.yml` and not substitutes for running-VM failover. Their historical source-PVC
+cleanup failure remains documented. No TLS, admission, fencing, finalizer, or
+SELinux bypass is used to turn an incomplete result into a pass.
+
+Repository documentation:
+- [Overview](../../../README.md)
+- [Rebuild validation](../../../docs/rebuild-validation.md)
+- [Compact storage design and Ceph authentication caveats](../../../docs/compact-storage-design.md)
+- [Regional DR design](../../../docs/regional-dr-design.md)
+- [VM execution blocker and remaining acceptance](../../../docs/hardware-blocker.md)
+- [Historical halted-VM diagnostics](../../../docs/halted-vm-protection.md)
+
+## License
+
+GPL-3.0-or-later; see the repository's [LICENSE](../../../LICENSE).
