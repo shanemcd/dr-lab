@@ -28,14 +28,37 @@ https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for
 
 /root/ocp-lab/docs/odf-ramendr-acm-discovered-vm-setup.md records a working x86 lab with MirrorPeer, DRPolicy, Submariner, OADP and vm-recipe. Its SINGLE_NODE storage tweaks are deliberately NOT carried over. /root/ocp-lab/manifests/acm-vm-dr contains workload/DRPC examples to adapt after infrastructure validation. Never commit the old lab's credentials or copy its kubeconfigs.
 
+## Live catalog discovery (2026-10-27)
+
+Read-only discovery against the rebuilt dr-recovery API returned 635 package manifests.
+The following entries are published by `redhat-operators`:
+
+| Package | Configured channel exists | Current CSV in that channel |
+| --- | --- | --- |
+| advanced-cluster-management | release-2.17 | not captured |
+| local-storage-operator | stable | not captured |
+| odf-operator | stable-4.22 | odf-operator.v4.22.6-rhodf |
+| openshift-gitops-operator | latest | not captured |
+| odf-multicluster-orchestrator | stable-4.22 | odf-multicluster-orchestrator.v4.22.6-rhodf |
+| redhat-oadp-operator | stable | oadp-operator.v1.6.1 |
+| kubevirt-hyperconverged | stable | kubevirt-hyperconverged-operator.v4.22.12 |
+
+OADP's advertised version meets the guide's >=1.4 requirement. Its CSV description
+advertises OwnNamespace only; orchestrator advertises AllNamespaces only. ODF and
+virtualization advertise OwnNamespace and SingleNamespace. These match the intended
+OperatorGroup scopes. Catalog publication does NOT establish ARM64 operand image
+availability, successful OLM resolution, runtime compatibility or vendor support.
+No subscriptions were created during this discovery. Channel heads can change;
+the runtime catalog/CSV checks remain necessary on every deployment.
+
 ## Remaining implementation gates
 
-- Discover exact 4.22 operator package/channel/CSV compatibility from the rebuilt clusters.
+- Establish actual operator resolution and runtime compatibility on ARM64; the catalog names/channels above are discovered, not installed.
 - Managed Submariner automation is implemented in stage10: cluster-set broker without Globalnet, explicit first-master gateway, SubmarinerConfig and ManagedClusterAddOn per site, then gateway/agent/connection conditions. Runtime CRD/behavior and an end-to-end cross-overlay probe remain unverified. The default NAT/cable-driver behavior is retained rather than guessing unverified CRD fields.
 - API procedure source: https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.17/pdf/networking/uninstalling-submariner-manually (Networking section1.4.21). Deprecated installNamespace is deliberately omitted. Default gateway selection is overridden by labeling the designated compact master before enabling the add-on.
-- Stage11_dr_prerequisites implements GitOps subscriptions on all three clusters, followed by the hub orchestrator subscription. It validates configured channels against the live redhat-operators catalog, waits for each subscription's specific installed CSV (not arbitrary namespace CSVs), then requires the hub DR CRDs and ramen-hub-operator rollout. GitOps latest and orchestrator stable-4.22 are provisional catalog-checked defaults; live compatibility has NOT been established.
+- Stage11_dr_prerequisites implements GitOps subscriptions on all three clusters, followed by the hub orchestrator subscription. It validates configured channels against the live redhat-operators catalog, waits for each subscription's specific installed CSV (not arbitrary namespace CSVs), then requires the hub DR CRDs and ramen-hub-operator rollout. GitOps latest and orchestrator stable-4.22 exist in the rebuilt site's live catalog; installation and runtime compatibility have NOT been established.
 - Stage11 also implements section4.7 cross-cluster ingress CA trust before installing operators. It preserves existing custom proxy CA certificates, checks ownership of its ConfigMap, de-duplicates PEM blocks, and changes only proxy.spec.trustedCA. Offline tests exercise actual Ansible union/rendering twice, including custom trust preservation. Live trust propagation and S3 TLS connectivity are still unverified; applying trust may trigger Machine Config Operator reconciliation.
-- Stage11 now installs OADP on both sites BEFORE orchestrator/DR configuration, following section4.16.1 (OADP >=1.4 required). Late OADP installation otherwise requires restarting DR-cluster operators for CRD discovery. Subscription and CSV waits support a selected namespace; GitOps/orchestrator keep openshift-operators, OADP uses openshift-adp with a namespace-scoped OperatorGroup. Existing conflicting groups are refused. The provisional stable channel must exist in the live catalog; version and ARM64 compatibility remain to be verified.
+- Stage11 now installs OADP on both sites BEFORE orchestrator/DR configuration, following section4.16.1 (OADP >=1.4 required). Late OADP installation otherwise requires restarting DR-cluster operators for CRD discovery. Subscription and CSV waits support a selected namespace; GitOps/orchestrator keep openshift-operators, OADP uses openshift-adp with a namespace-scoped OperatorGroup. Existing conflicting groups are refused. The stable channel exists in the rebuilt site's live catalog and advertises OADP 1.6.1; successful installation and ARM64 operand compatibility remain to be verified.
 - OADP DPA follows section4.16.1 exactly: backupImages false, nodeAgent disabled, Velero openshift/aws/kubevirt plugins and noDefaultBackupLocation true, then waits for Velero rollout. This does NOT prove backup/restore: orchestrator-created DR secrets, S3 access, BackupStorageLocations and actual object recovery remain unverified. No hand-authored S3 credentials or redundant disk backup paths are configured.
 - Implement documented peering and policy configuration against live CRDs rather than guessing fields. Orchestrator subscription alone does not configure or validate DR.
 - Verify mirroring/S3 metadata/OADP, then protect a minimal ARM64 VM.
