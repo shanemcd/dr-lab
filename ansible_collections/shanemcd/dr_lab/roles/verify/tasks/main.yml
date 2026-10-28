@@ -62,6 +62,9 @@
     loop_var: sno_node
     label: "{{ sno_node.name }}"
 
+- name: Verify synchronized guest clocks
+  ansible.builtin.include_tasks: time.yml
+
 - name: Write the evidence report
   ansible.builtin.include_tasks: evidence.yml
 

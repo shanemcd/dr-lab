@@ -12,6 +12,7 @@ rhsm_activationkey: ""
 # qemu-system-aarch64 (the distro emulator — no CXL backports needed in
 # this lab) and edk2-aarch64 (AAVMF UEFI firmware for arm64 guests).
 host_packages:
+  - chrony
   - tar
   - podman
   - iptables

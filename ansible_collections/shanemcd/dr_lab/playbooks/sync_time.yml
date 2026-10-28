@@ -15,3 +15,7 @@
       ansible.builtin.import_role:
         name: shanemcd.dr_lab.install_config
         tasks_from: time-sync.yml
+    - name: Verify guest synchronization to the lab relay
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.verify
+        tasks_from: time.yml

@@ -1,0 +1,30 @@
+---
+- name: Require synchronized guest clocks from the configured lab relay
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -o
+      - BatchMode=yes
+      - -o
+      - ConnectTimeout=5
+      - -o
+      - StrictHostKeyChecking=accept-new
+      - -o
+      - "UserKnownHostsFile={{ vm_assets_dir }}/secrets/known_hosts"
+      - -i
+      - "{{ install_ssh_key_path }}"
+      - "core@{{ item.ip }}"
+      - chronyc
+      - -n
+      - tracking
+  loop: "{{ lab_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: verify_guest_time
+  changed_when: false
+  until: >-
+    verify_guest_time.rc == 0 and
+    'Leap status     : Normal' in verify_guest_time.stdout and
+    ('(' ~ lab_gateway_ip ~ ')') in verify_guest_time.stdout
+  retries: 30
+  delay: 10

@@ -29,3 +29,11 @@ class TimeSyncTests(unittest.TestCase):
         for role, task in [('host_prep', 'time.yml'), ('teardown', 'main.yml')]:
             self.assertIn('# {mark} DR-LAB NTP RELAY', (ROLES / role / 'tasks' / task).read_text())
         self.assertNotIn('local stratum', (ROLES / 'host_prep/tasks/time.yml').read_text())
+        upgrade = (ROLES / 'install_config/tasks/time-sync.yml').read_text()
+        self.assertIn('--request-timeout=20s', upgrade)
+        self.assertLess(upgrade.index('install_config_time_pool.rc == 0'),
+                        upgrade.index('(install_config_time_pool.stdout | from_json).status.updatedMachineCount'))
+        verify = (ROLES / 'verify/tasks/time.yml').read_text()
+        self.assertIn('StrictHostKeyChecking=accept-new', verify)
+        self.assertIn("'Leap status     : Normal'", verify)
+        self.assertIn('lab_gateway_ip', verify)
