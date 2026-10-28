@@ -27,25 +27,32 @@ host_gateway_suffix: 1
 # with the gateway or any node suffix (the role asserts this).
 network_probe_suffix: 250
 
-# API endpoints and pinned ingress route names all live on each SNO's own
-# IP (no VIPs). Built per cluster from sno_nodes; used by /etc/hosts, the
-# libvirt DNS host records, and the node's /etc/hosts machine-config.
+# API endpoints and ingress route names: hub (SNO) serves api + apps on
+# its own IP (no VIPs); compact clusters resolve api/api-int + apps records
+# to the cluster's API/ingress VIP on the lab bridge (haproxy). Built per
+# cluster from `clusters`; used by /etc/hosts, the libvirt DNS host records,
+# and the node's /etc/hosts machine-config.
 network_hosts_block: >-
   {%- set lines = [] -%}
-  {%- for node in sno_nodes -%}
-  {%- set cd = node.domain -%}
-  {%- set _ = lines.append(node.ip ~ ' api.' ~ cd ~ ' api-int.' ~ cd) -%}
-  {%- set _ = lines.append(node.ip ~ ' console-openshift-console.apps.' ~ cd
+  {%- for c in clusters -%}
+  {%- set cd = c.name ~ '.' ~ base_domain -%}
+  {%- if c.install_flavor == 'compact' -%}
+  {%- set vip = lab_subnet_prefix ~ '.' ~ c.api_vip_suffix -%}
+  {%- else -%}
+  {%- set vip = lab_subnet_prefix ~ '.' ~ c.ip_suffix -%}
+  {%- endif -%}
+  {%- set _ = lines.append(vip ~ ' api.' ~ cd ~ ' api-int.' ~ cd) -%}
+  {%- set _ = lines.append(vip ~ ' console-openshift-console.apps.' ~ cd
         ~ ' oauth-openshift.apps.' ~ cd
         ~ ' canary-openshift-ingress-canary.apps.' ~ cd) -%}
-  {%- set _ = lines.append(node.ip ~ ' default-route-openshift-image-registry.apps.' ~ cd) -%}
+  {%- set _ = lines.append(vip ~ ' default-route-openshift-image-registry.apps.' ~ cd) -%}
   {%- endfor -%}
   {{ lines }}
 
 # Convenience derivations (single source of truth = the suffixes above).
 lab_gateway_ip: "{{ lab_subnet_prefix }}.{{ host_gateway_suffix }}"
 
-# Per-cluster derivations (loop over sno_nodes / clusters).
+# Per-cluster derivations (loop over lab_nodes / clusters).
 cluster_domain: "{{ cluster_name }}.{{ base_domain }}"
 cluster_ip: "{{ lab_subnet_prefix }}.{{ cluster_ip_suffix }}"
 
@@ -71,11 +78,13 @@ cluster_network_host_prefix: 23
 
 # Reversible host-network changes (shared by network + teardown — role
 # defaults never cross roles). Teardown reverses exactly these. The bridge
-# carries only the gateway address (no DNS or VIP addresses).
+# carries the gateway plus every compact cluster's API/ingress VIP (haproxy
+# on the host binds the VIPs).
 network_sysctl_conf_name: "99-dr-lab.conf"
 # DHCP free-range suffixes (reservations pin the nodes; unknown clients
 # only get addresses from this narrow, collision-asserted segment).
 network_dhcp_range_start_suffix: 200
 network_dhcp_range_end_suffix: 209
-network_bridge_addresses:
-  - "{{ lab_subnet_prefix }}.{{ host_gateway_suffix }}/24"
+network_bridge_addresses: >-
+  {{ ([lab_subnet_prefix ~ '.' ~ host_gateway_suffix ~ '/24']
+      + (compact_clusters | map(attribute='api_vip') | list)) }}

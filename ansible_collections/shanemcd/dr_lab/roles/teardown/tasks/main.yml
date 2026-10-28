@@ -28,7 +28,7 @@
 - name: Check whether each lab domain is defined
   ansible.builtin.command:
     argv: [virsh, -c, "{{ libvirt_uri }}", domuuid, "{{ item.name }}"]
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: teardown_domain_uuid
@@ -132,7 +132,7 @@
   # The included tasks carry `tags: vms` themselves — include_tasks children
   # do NOT inherit the include task's tags on their own (no `apply` support
   # in ansible-core 2.19's include refactor).
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     loop_var: node
     label: "{{ node.name }}"
@@ -164,7 +164,7 @@
 
 - name: Remove the OpenShift Virtualization layer
   ansible.builtin.include_tasks: teardown-virtualization.yml
-  loop: "{{ sno_nodes | selectattr('name', 'in', virtualization_clusters) | list }}"
+  loop: "{{ lab_nodes | selectattr('name', 'in', virtualization_clusters) | list }}"
   loop_control:
     loop_var: teardown_virt_node
   # included tasks carry `tags: virtualization` themselves
@@ -313,7 +313,7 @@
   ansible.builtin.file:
     path: "{{ install_base_dir }}/{{ item.name }}"
     state: absent
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   tags: install-data

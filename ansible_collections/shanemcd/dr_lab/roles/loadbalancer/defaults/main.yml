@@ -1,0 +1,7 @@
+---
+# haproxy image + state layout. The image is built locally from
+# fedora-minimal so the lab has no external image registry dependency at
+# runtime (the base image itself is pulled during artifacts/host_prep
+# egress, same as the RHCOS ISO).
+loadbalancer_image: "localhost/dr-lab/haproxy:latest"
+loadbalancer_state_dir: "/etc/dr-lab/loadbalancer"

@@ -1,0 +1,3 @@
+FROM registry.fedoraproject.org/fedora-minimal:latest
+RUN microdnf -y install haproxy && microdnf clean all
+CMD ["haproxy", "-W", "-db", "-f", "/etc/haproxy/haproxy.cfg"]

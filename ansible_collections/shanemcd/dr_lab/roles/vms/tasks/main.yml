@@ -13,7 +13,7 @@
 - name: Stat per-node ignition configs
   ansible.builtin.stat:
     path: "{{ vm_ignition_dir }}/{{ item.name }}.ign"
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: vms_ignition_stat
@@ -66,7 +66,7 @@
       - "{{ vm_images_dir }}/{{ item.name }}.qcow2"
       - "{{ item.disk }}"
     creates: "{{ vm_images_dir }}/{{ item.name }}.qcow2"
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
 
@@ -111,14 +111,14 @@
 
 - name: Stage and define each persistent SNO domain
   ansible.builtin.include_tasks: libvirt-node.yml
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     loop_var: node
 
 - name: Check whether each domain is active
   ansible.builtin.command:
     argv: [virsh, -c, "{{ libvirt_uri }}", dominfo, "{{ item.name }}"]
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: vms_dominfo
@@ -139,7 +139,7 @@
   # guest kernel came up; the cluster_install stage owns everything after.
   ansible.builtin.command:
     argv: [grep, "-q", "{{ vms_boot_marker }}", "/var/log/libvirt/qemu/{{ item.name }}.serial.log"]
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: vms_boot_check

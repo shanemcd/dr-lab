@@ -1,0 +1,66 @@
+---
+# Per-cluster API/ingress VIPs for the compact clusters, served by haproxy
+# in a rootful podman container on the host network. Mode switching
+# (bootstrap -> masters) is driven by state markers created by
+# cluster_install; this role only renders + reloads.
+- name: Require podman
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.packages['podman'] is defined
+
+- name: Ensure the load balancer state + config directory exists
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ loadbalancer_state_dir }}"
+
+- name: Stage the haproxy container build context
+  ansible.builtin.copy:
+    src: Containerfile
+    dest: "{{ loadbalancer_state_dir }}/Containerfile"
+    mode: '0644'
+
+- name: Build the haproxy image
+  ansible.builtin.command:
+    argv: [podman, build, "-t", "{{ loadbalancer_image }}", "{{ loadbalancer_state_dir }}"]
+  register: lb_build
+  changed_when: false
+  failed_when: lb_build.rc != 0
+
+- name: Render haproxy.cfg
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: "{{ loadbalancer_state_dir }}/haproxy.cfg"
+    mode: '0644'
+  register: lb_cfg
+
+- name: Install the systemd unit
+  ansible.builtin.copy:
+    src: dr-lab-lb.service
+    dest: /etc/systemd/system/dr-lab-lb.service
+    mode: '0644'
+  register: lb_unit
+
+- name: Enable + (re)start the load balancer
+  ansible.builtin.systemd_service:
+    name: dr-lab-lb.service
+    state: restarted
+    enabled: true
+    daemon_reload: "{{ lb_unit.changed }}"
+  when: lb_cfg.changed or lb_unit.changed
+
+- name: Ensure the load balancer is running
+  ansible.builtin.systemd_service:
+    name: dr-lab-lb.service
+    state: started
+    enabled: true
+    daemon_reload: "{{ lb_unit.changed }}"
+
+- name: Read back the rendered mode lines (sanity)
+  ansible.builtin.command:
+    argv: [grep, "-c", "^listen", "{{ loadbalancer_state_dir }}/haproxy.cfg"]
+  changed_when: false
+  register: lb_listeners
+  failed_when: lb_listeners.stdout | int != (compact_clusters | length) * 4

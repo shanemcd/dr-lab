@@ -2,18 +2,21 @@
 # libvirt owns this network's bridge, NAT, dnsmasq, DHCP and autostart.
 # Never modify the user's default/hostbridge networks.
 - name: Validate network addressing
+  vars:
+    _claimed: >-
+      {{ ([host_gateway_suffix, network_probe_suffix]
+          + (lab_nodes | map(attribute='ip_suffix') | list)
+          + (bootstrap_nodes | map(attribute='ip_suffix') | list)
+          + (compact_clusters | map(attribute='api_vip_suffix') | list)) | map('int') | list }}
   ansible.builtin.assert:
     that:
       - lab_bridge_name | length <= 15
-      - >-
-        network_probe_suffix | int
-        not in ([host_gateway_suffix | int]
-                + (sno_nodes | map(attribute='ip_suffix') | map('int') | list))
+      - network_probe_suffix | int not in _claimed
+      - (_claimed | length) == (_claimed | unique | length)
       - >-
         (range(network_dhcp_range_start_suffix | int,
                network_dhcp_range_end_suffix | int + 1) | list
-         | intersect([host_gateway_suffix | int, network_probe_suffix | int]
-                     + (sno_nodes | map(attribute='ip_suffix') | map('int') | list))) == []
+         | intersect(_claimed)) == []
 
 - name: Select upstream DNS servers
   ansible.builtin.include_tasks: upstream-dns.yml
@@ -161,7 +164,7 @@
 - name: Resolve each cluster's API through libvirt DNS
   ansible.builtin.command:
     argv: [dig, +short, "api.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.domain }}"
   register: network_cluster_dns
@@ -170,7 +173,7 @@
 - name: Resolve each cluster's ingress wildcard through libvirt DNS
   ansible.builtin.command:
     argv: [dig, +short, "x.apps.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "*.{{ item.domain }}"
   register: network_apps_dns

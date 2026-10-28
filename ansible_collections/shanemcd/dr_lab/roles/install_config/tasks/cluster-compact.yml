@@ -1,0 +1,225 @@
+---
+# Compact-cluster install config ({{ cluster_name }}): real UPI flow.
+# Installer outputs bootstrap.ign (run live on the bootstrap VM) and
+# master.ign (the MCS pointer config every master installs to disk).
+# Masters boot the live ISO with a small wrapper ignition (fw_cfg) that
+# embeds master.ign + an install-to-disk unit; DHCP reservations provide
+# per-node IP/hostname, so one wrapper serves all masters of the cluster.
+
+- name: Stat existing compact ignition artifacts
+  ansible.builtin.stat:
+    path: "{{ install_dir }}/{{ item }}"
+  loop:
+    - "{{ install_config_metadata_name }}"
+    - "{{ install_config_bootstrap_name }}"
+    - "{{ install_config_master_name }}"
+  register: install_config_existing
+
+- name: Set ignition generation state facts
+  ansible.builtin.set_fact:
+    install_config_ignition_complete: >-
+      {{ install_config_existing.results
+         | map(attribute='stat.exists')
+         | select('equalto', false) | list | length == 0 }}
+    install_config_bootstrap_mtime: >-
+      {{ (install_config_existing.results
+          | selectattr('item', 'equalto', install_config_bootstrap_name)
+          | map(attribute='stat.mtime') | list | first) | default(0) | int }}
+
+- name: Set ignition age fact
+  ansible.builtin.set_fact:
+    install_config_ignition_age_hours: >-
+      {{ ((ansible_date_time.epoch | int - install_config_bootstrap_mtime)
+          / 3600) | round(1) }}
+
+- name: Set ignition staleness fact
+  ansible.builtin.set_fact:
+    install_config_ignition_stale: >-
+      {{ install_config_ignition_complete | bool
+         and (install_config_ignition_age_hours | float
+              > ignition_fresh_window_hours | int) }}
+
+- name: Assert existing ignition is usable
+  # Fresh ignition is fine (reused); bootstrap certificates are only valid
+  # ~24h, so anything past the window must be regenerated from scratch.
+  ansible.builtin.assert:
+    that:
+      - not install_config_ignition_stale | bool
+    fail_msg: >-
+      Ignition under {{ install_dir }} is
+      {{ install_config_ignition_age_hours }}h old (window
+      {{ ignition_fresh_window_hours }}h) — bootstrap certificates have
+      likely expired. Run the teardown playbook, then re-run to generate
+      fresh ignition.
+  when: install_config_ignition_complete | bool
+
+- name: Guard against partial or consumed install state
+  ansible.builtin.assert:
+    that:
+      - >-
+        install_config_existing.results
+        | map(attribute='stat.exists') | select('equalto', true)
+        | list | length == 0
+    fail_msg: >-
+      Partial or consumed install artifacts under {{ install_dir }} — run the
+      teardown playbook first (fresh-dir guard).
+  when: not install_config_ignition_complete | bool
+
+- name: Generate manifests and ignition configs
+  when: not install_config_ignition_complete | bool
+  block:
+
+    - name: Render the install config
+      ansible.builtin.template:
+        src: install-config.yaml.j2
+        dest: "{{ install_dir }}/{{ install_config_name }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Keep the pristine install config copy
+      ansible.builtin.copy:
+        src: "{{ install_dir }}/{{ install_config_name }}"
+        dest: "{{ install_dir }}/{{ install_config_pristine_name }}"
+        remote_src: true
+        mode: "0600"
+      no_log: true
+
+    - name: Create manifests
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/openshift-install"
+          - create
+          - manifests
+          - "--dir"
+          - "{{ install_dir }}"
+      changed_when: true
+
+    - name: Create ignition configs
+      # Emits bootstrap.ign, master.ign, worker.ign (unused: no workers),
+      # metadata.json + auth/.
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/openshift-install"
+          - create
+          - ignition-configs
+          - "--dir"
+          - "{{ install_dir }}"
+      changed_when: true
+
+    - name: Set ignition artifact permissions
+      ansible.builtin.file:
+        path: "{{ install_dir }}/{{ item }}"
+        mode: "0600"
+      loop:
+        - "{{ install_config_bootstrap_name }}"
+        - "{{ install_config_master_name }}"
+
+    - name: Harden the auth directory permissions
+      ansible.builtin.file:
+        path: "{{ install_dir }}/{{ install_config_auth_dir_name }}"
+        state: directory
+        mode: "0700"
+
+    - name: Harden auth file permissions
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: "0600"
+      loop:
+        - "{{ install_dir }}/{{ install_config_kubeconfig_name }}"
+        - "{{ install_dir }}/{{ install_config_kubeadmin_password_name }}"
+
+- name: Assemble the master live-wrapper ignition
+  # Same fw_cfg delivery model as the SNO path: the live boot runs this
+  # wrapper (it carries the cluster's master.ign plus the install-to-disk
+  # unit), then coreos-installer writes the installed master and reboots
+  # into the real first boot (master.ign -> MCS).
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ install_config_merge_script_path }}"
+      - wrapper
+      - "{{ install_dir }}/{{ install_config_master_name }}"
+      - "{{ vm_ignition_dir }}/{{ cluster_name }}-master-wrapper.ign"
+  register: install_config_wrapper_merge
+  changed_when: "'MERGED' in install_config_wrapper_merge.stdout"
+
+- name: Set wrapper ignition permissions
+  ansible.builtin.file:
+    path: "{{ vm_ignition_dir }}/{{ cluster_name }}-master-wrapper.ign"
+    mode: "0600"
+
+- name: Publish the bootstrap ignition for the vms role
+  ansible.builtin.copy:
+    src: "{{ install_dir }}/{{ install_config_bootstrap_name }}"
+    dest: "{{ vm_ignition_dir }}/{{ cluster_name }}-bootstrap.ign"
+    mode: "0600"
+    remote_src: true
+
+- name: Stat the installer kubeconfig
+  ansible.builtin.stat:
+    path: "{{ kubeconfig_path }}"
+  register: install_config_kubeconfig_stat
+
+- name: Ensure the controller kubeconfig directory exists
+  ansible.builtin.file:
+    path: "{{ kubeconfigs_dir }}"
+    state: directory
+    owner: "{{ lab_workspace_identity.uid }}"
+    group: "{{ lab_workspace_identity.gid }}"
+    mode: "0700"
+  when: install_config_kubeconfig_stat.stat.exists
+
+- name: Publish a controller-readable kubeconfig copy
+  ansible.builtin.copy:
+    src: "{{ kubeconfig_path }}"
+    dest: "{{ kubeconfigs_dir }}/{{ cluster_name }}.kubeconfig"
+    owner: "{{ lab_workspace_identity.uid }}"
+    group: "{{ lab_workspace_identity.gid }}"
+    mode: "0600"
+    remote_src: true
+  when: install_config_kubeconfig_stat.stat.exists
+
+- name: Read the install metadata
+  ansible.builtin.slurp:
+    src: "{{ install_dir }}/{{ install_config_metadata_name }}"
+  register: install_config_metadata_raw
+
+- name: Set install metadata fact
+  ansible.builtin.set_fact:
+    install_config_metadata: "{{ install_config_metadata_raw.content | b64decode | from_json }}"
+
+- name: Read the wrapper ignition for verification
+  ansible.builtin.slurp:
+    src: "{{ vm_ignition_dir }}/{{ cluster_name }}-master-wrapper.ign"
+  register: install_config_wrapper_raw
+
+- name: Verify wrapper + bootstrap ignition shape
+  ansible.builtin.assert:
+    that:
+      - install_config_metadata.infraID is search('^' ~ cluster_name)
+      - install_config_pull_secret_stat.stat.mode == '0600'
+      # the wrapper embeds the master pointer config + install unit
+      - "'coreos-installer' in (install_config_wrapper_raw.content | b64decode)"
+      - "'/opt/dr-lab/master.ign' in (install_config_wrapper_raw.content | b64decode)"
+  fail_msg: >-
+    Compact ignition generation verification failed for {{ cluster_name }}.
+
+- name: Write the ignition generation stamp
+  ansible.builtin.copy:
+    content: >-
+      {{ '%Y-%m-%dT%H:%M:%SZ'
+         | strftime(second=ansible_date_time.epoch | int, utc=true) }}
+    dest: "{{ install_dir }}/{{ install_config_stamp_name }}"
+    mode: "0600"
+  when: not install_config_ignition_complete | bool
+
+- name: Cluster install config summary
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster_name }} ignition OK (UPI compact) — infraID
+      {{ install_config_metadata.infraID }}, age
+      {{ install_config_ignition_age_hours }}h (window
+      {{ ignition_fresh_window_hours }}h), generated this run:
+      {{ not install_config_ignition_complete | bool }}; wrapper =
+      {{ vm_ignition_dir }}/{{ cluster_name }}-master-wrapper.ign,
+      bootstrap = {{ vm_ignition_dir }}/{{ cluster_name }}-bootstrap.ign.

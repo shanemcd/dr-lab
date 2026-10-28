@@ -1,0 +1,56 @@
+---
+# Managed by shanemcd.dr_lab.loadbalancer — per-cluster API/ingress VIPs.
+# Mode per cluster: bootstrap (6443/22623 -> the transient bootstrap node)
+# or masters (-> the three control-plane nodes). The mode marker lives in
+# {{ loadbalancer_state_dir }}/lb-<cluster>-masters and is created by
+# cluster_install once `openshift-install wait-for bootstrap-complete`
+# succeeds; this template never guesses — unknown mode = bootstrap.
+global
+  log stdout format raw local0
+  daemon
+  maxconn 20000
+
+defaults
+  mode tcp
+  log global
+  option tcplog
+  timeout connect 10s
+  timeout client 60m
+  timeout server 60m
+
+{% for c in compact_clusters %}
+{% set masters_mode = lookup('ansible.builtin.file', loadbalancer_state_dir ~ '/lb-' ~ c.name ~ '-masters', errors='ignore') is not none %}
+# ---- {{ c.name }} ({{ 'masters' if masters_mode else 'bootstrap' }} mode) ----
+listen api_{{ c.name | replace('-', '_') }}
+  bind {{ c.api_vip }}:6443
+{% if masters_mode %}
+{% for m in c.masters %}
+  server {{ m.name }} {{ m.ip }}:6443 check inter 2s fall 60 rise 3
+{% endfor %}
+{% else %}
+  server {{ c.bootstrap[0].name }} {{ c.bootstrap[0].ip }}:6443 check inter 2s fall 200 rise 3
+{% endif %}
+
+listen mcs_{{ c.name | replace('-', '_') }}
+  bind {{ c.api_vip }}:22623
+{% if masters_mode %}
+{% for m in c.masters %}
+  server {{ m.name }} {{ m.ip }}:22623 check inter 2s fall 60 rise 3
+{% endfor %}
+{% else %}
+  server {{ c.bootstrap[0].name }} {{ c.bootstrap[0].ip }}:22623 check inter 2s fall 200 rise 3
+{% endif %}
+
+listen http_{{ c.name | replace('-', '_') }}
+  bind {{ c.api_vip }}:80
+{% for m in c.masters %}
+  server {{ m.name }} {{ m.ip }}:80 check inter 5s fall 20 rise 3
+{% endfor %}
+
+listen https_{{ c.name | replace('-', '_') }}
+  bind {{ c.api_vip }}:443
+{% for m in c.masters %}
+  server {{ m.name }} {{ m.ip }}:443 check inter 5s fall 20 rise 3
+{% endfor %}
+
+{% endfor %}

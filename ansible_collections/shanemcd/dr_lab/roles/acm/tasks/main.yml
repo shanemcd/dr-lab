@@ -2,15 +2,15 @@
 - name: Assert the ACM hub and spokes are known clusters
   ansible.builtin.assert:
     that:
-      - acm_cluster in sno_nodes | map(attribute='name') | list
+      - acm_cluster in lab_nodes | map(attribute='name') | list
       - acm_spokes | length >= 1
-      - acm_spokes | difference(sno_nodes | map(attribute='name') | list) | length == 0
+      - acm_spokes | difference(lab_nodes | map(attribute='name') | list) | length == 0
       - acm_cluster not in acm_spokes
     fail_msg: >-
       acm_cluster must be an existing cluster and acm_spokes must name
       other existing clusters; found hub {{ acm_cluster }} and spokes
       {{ acm_spokes | default([]) }} vs topology
-      {{ sno_nodes | map(attribute='name') | list }}.
+      {{ lab_nodes | map(attribute='name') | list }}.
 
 - name: Set hub facts
   ansible.builtin.set_fact:

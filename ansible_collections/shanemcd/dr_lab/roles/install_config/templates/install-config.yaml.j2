@@ -1,7 +1,7 @@
 # Managed by shanemcd.dr_lab.install_config — do not edit.
 # Secrets are injected via facts slurped by privileged tasks (controller-side
 # file lookups cannot read the root-owned 0600 files); rendering runs no_log.
-# Per-cluster knobs come from the sno_nodes loop vars (cluster_name,
+# Per-cluster knobs come from the lab_nodes loop vars (cluster_name,
 # cluster_network_cidr, service_network_cidr) — each SNO gets unique
 # pod/service CIDRs so the three clusters can peer later.
 apiVersion: v1
@@ -13,11 +13,13 @@ compute:
   replicas: 0
 controlPlane:
   name: master
-  replicas: 1
+  replicas: {{ control_plane_replicas }}
 platform:
   none: {}
+{% if cluster_flavor == 'sno' %}
 bootstrapInPlace:
   installationDisk: {{ bip_installation_disk }}
+{% endif %}
 pullSecret: {{ install_config_pull_secret_json | to_json }}
 sshKey: {{ install_config_ssh_pubkey | to_json }}
 networking:

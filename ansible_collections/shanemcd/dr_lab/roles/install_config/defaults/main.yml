@@ -9,6 +9,11 @@ install_config_pristine_name: "install-config.yaml.pristine"
 # boot; the full bootstrap runs in the live environment, then
 # coreos-installer writes the installed master and reboots).
 install_config_bip_name: "bootstrap-in-place-for-live-iso.ign"
+# Installer-fixed UPI outputs (compact clusters): bootstrap.ign runs live
+# on the transient bootstrap VM; master.ign is the MCS pointer config the
+# install-to-disk wrapper bakes into every master.
+install_config_bootstrap_name: "bootstrap.ign"
+install_config_master_name: "master.ign"
 install_config_auth_dir_name: "auth"
 install_config_kubeconfig_name: "auth/kubeconfig"
 install_config_kubeadmin_password_name: "auth/kubeadmin-password"

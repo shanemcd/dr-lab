@@ -3,20 +3,20 @@
   ansible.builtin.assert:
     that:
       - storage_clusters | length >= 1
-      - storage_clusters | difference(sno_nodes | map(attribute='name') | list) | length == 0
+      - storage_clusters | difference(lab_nodes | map(attribute='name') | list) | length == 0
     fail_msg: >-
       storage_clusters must name existing clusters; found
       {{ storage_clusters | default([]) }} vs topology
-      {{ sno_nodes | map(attribute='name') | list }}.
+      {{ lab_nodes | map(attribute='name') | list }}.
 
 - name: Attach the ODF data disks to the spoke VMs
   ansible.builtin.include_tasks: disks.yml
-  loop: "{{ sno_nodes | selectattr('name', 'in', storage_clusters) | list }}"
+  loop: "{{ lab_nodes | selectattr('name', 'in', storage_clusters) | list }}"
   loop_control:
     loop_var: storage_node
 
 - name: Layer ODF on the target clusters
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ sno_nodes | selectattr('name', 'in', storage_clusters) | list }}"
+  loop: "{{ lab_nodes | selectattr('name', 'in', storage_clusters) | list }}"
   loop_control:
     loop_var: sno_node

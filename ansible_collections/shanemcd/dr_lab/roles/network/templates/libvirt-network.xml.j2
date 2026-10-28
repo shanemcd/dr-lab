@@ -16,20 +16,20 @@
 {% endfor %}
     </host>
 {% endfor %}
-{% for node in sno_nodes %}
-    <host ip='{{ node.ip }}'><hostname>{{ node.name }}.{{ base_domain }}</hostname></host>
+{% for node in lab_nodes + bootstrap_nodes %}
+    <host ip='{{ node.ip }}'><hostname>{{ node.fqdn }}</hostname></host>
 {% endfor %}
   </dns>
   <ip address='{{ lab_gateway_ip }}' netmask='{{ lab_subnet_netmask }}'>
     <dhcp>
       <range start='{{ lab_subnet_prefix }}.{{ network_dhcp_range_start_suffix }}' end='{{ lab_subnet_prefix }}.{{ network_dhcp_range_end_suffix }}'/>
-{% for node in sno_nodes %}
+{% for node in lab_nodes + bootstrap_nodes %}
       <host mac='{{ mac_base }}:{{ node.mac_suffix }}' name='{{ node.name }}' ip='{{ node.ip }}'/>
 {% endfor %}
     </dhcp>
   </ip>
   <dnsmasq:options>
-{% for node in sno_nodes %}
+{% for node in lab_nodes %}
     <dnsmasq:option value='address=/.apps.{{ node.domain }}/{{ node.ip }}'/>
 {% endfor %}
   </dnsmasq:options>

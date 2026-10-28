@@ -13,7 +13,7 @@
 - name: Stat the per-cluster auth artifacts
   ansible.builtin.stat:
     path: "{{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: cluster_install_kubeconfig_stat
@@ -32,6 +32,6 @@
 
 - name: Converge each SNO cluster
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ sno_nodes }}"
+  loop: "{{ lab_nodes }}"
   loop_control:
     loop_var: sno_node

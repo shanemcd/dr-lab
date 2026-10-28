@@ -1,14 +1,25 @@
 ---
-# install_config: single-node install-config + bootstrap-in-place, per
-# cluster. The BiP ignition runs the full bootstrap in a live environment,
-# then coreos-installer (-n: NM connections carry over) writes the
-# installed master and reboots. Per-node ignition (fw_cfg delivery, no
-# HTTP server): each SNO's merged BiP ignition carries a static-IP NM
-# keyfile, /etc/hosts and hostname. Shared name resolution + the SNO
-# master hostname persist onto the installed master via an install-time
-# MachineConfig rendered by the bootstrap MCS. Secrets stay path-only;
-# ignition is generated at most once per fresh window: complete + fresh
-# => reuse; stale or partial => fail with teardown guidance.
+# install_config: per-cluster install-config + ignition.
+#
+# Two flavors:
+#   sno     (dr-hub): bootstrap-in-place. The BiP ignition runs the full
+#           bootstrap in a live environment, then coreos-installer writes
+#           the installed master and reboots. Per-node ignition (fw_cfg
+#           delivery, no HTTP server): merged BiP ignition carries a
+#           static-IP NM keyfile, /etc/hosts and hostname.
+#   compact (dr-primary, dr-recovery): real UPI. The installer emits
+#           bootstrap.ign + master.ign; each master boots the live ISO
+#           with a small wrapper ignition (fw_cfg) that carries the
+#           cluster's master.ign plus an install-to-disk unit
+#           (coreos-installer install --copy-network). Per-node identity
+#           (IP, hostname) comes from the dnsmasq DHCP reservations, so
+#           one wrapper ignition serves every master of a cluster. The
+#           bootstrap VM runs bootstrap.ign directly in its live
+#           environment.
+#
+# Secrets stay path-only; ignition is generated at most once per fresh
+# window: complete + fresh => reuse; stale or partial => fail with
+# teardown guidance.
 
 - name: Gather host facts
   # Playbooks run with gather_facts: false; this role consumes
@@ -50,6 +61,11 @@
     fail_msg: >-
       Install pull secret at {{ install_pull_secret_path }} is not valid JSON —
       replace it with a valid OpenShift pull secret and re-run.
+
+- name: Assert the install pull secret mode
+  ansible.builtin.assert:
+    that:
+      - install_config_pull_secret_stat.stat.mode == '0600'
 
 - name: Ensure the install ssh key directory
   ansible.builtin.file:
@@ -109,6 +125,6 @@
 
 - name: Per-cluster install config and ignition
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ sno_nodes }}"
+  loop: "{{ clusters }}"
   loop_control:
-    loop_var: sno_node
+    loop_var: cluster

@@ -26,16 +26,16 @@
 - name: Assert the generated node topology is sane
   ansible.builtin.assert:
     that:
-      - sno_nodes | length == clusters | length
-      - sno_nodes | length >= 1
-      - sno_nodes | map(attribute='ip_suffix') | list
-        | length == sno_nodes | map(attribute='ip_suffix') | unique | list | length
-      - sno_nodes | map(attribute='ip_suffix') | max
+      - lab_nodes | length == clusters | length
+      - lab_nodes | length >= 1
+      - lab_nodes | map(attribute='ip_suffix') | list
+        | length == lab_nodes | map(attribute='ip_suffix') | unique | list | length
+      - lab_nodes | map(attribute='ip_suffix') | max
         < network_dhcp_range_start_suffix
-      - sno_nodes | map(attribute='name') | list
-        | length == sno_nodes | map(attribute='name') | unique | list | length
-      - sno_nodes | map(attribute='domain') | list
-        | length == sno_nodes | map(attribute='domain') | unique | list | length
+      - lab_nodes | map(attribute='name') | list
+        | length == lab_nodes | map(attribute='name') | unique | list | length
+      - lab_nodes | map(attribute='domain') | list
+        | length == lab_nodes | map(attribute='domain') | unique | list | length
     fail_msg: >-
       The generated topology is inconsistent: each cluster needs exactly one
       node, IP suffixes/names/domains unique, IP suffixes below the dnsmasq
@@ -45,7 +45,7 @@
 - name: Set the per-node RAM specs for the committed-RAM measure
   ansible.builtin.set_fact:
     host_prep_node_mem_specs: >-
-      {% for n in sno_nodes %}{{ n.name }}={{ n.ram | regex_replace('G$', '') }} {% endfor %}
+      {% for n in lab_nodes %}{{ n.name }}={{ n.ram | regex_replace('G$', '') }} {% endfor %}
 
 - name: Measure guest RAM already committed by running lab VMs
   # Resume path (observed live): a mid-install re-run with part of the
@@ -76,11 +76,11 @@
 - name: Compute guest resource requirements
   ansible.builtin.set_fact:
     host_prep_required_mem_gib: >-
-      {{ sno_nodes | map(attribute='ram') | map('regex_replace', 'G$', '') | map('int') | sum }}
+      {{ lab_nodes | map(attribute='ram') | map('regex_replace', 'G$', '') | map('int') | sum }}
     host_prep_required_vcpu: >-
-      {{ sno_nodes | map(attribute='vcpu') | sum }}
+      {{ lab_nodes | map(attribute='vcpu') | sum }}
     host_prep_required_disk_gib: >-
-      {{ sno_nodes | map(attribute='disk') | map('regex_replace', 'G$', '') | map('int') | sum }}
+      {{ lab_nodes | map(attribute='disk') | map('regex_replace', 'G$', '') | map('int') | sum }}
     host_prep_available_mem_gib: >-
       {{ (ansible_facts['memory_mb']['nocache']['free'] / 1024)
          + (host_prep_running_vm_mem.stdout | int) }}
