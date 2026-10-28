@@ -63,7 +63,10 @@ Live evidence:
 These facts prove a replication checkpoint and successful object capture, **not**
 that recovery can restore and read the marker, not that a VM has executed, and
 not that unplanned failover is fenced or split-brain-safe. Those remain separate
-acceptance work, as does the full teardown and one-shot redeployment.
+acceptance work. The full infrastructure teardown and one-shot redeployment
+subsequently passed separately; see [rebuild validation](rebuild-validation.md).
+The diagnostic evidence in this document predates that teardown and describes
+the previous clusters, not objects currently installed on the rebuilt sites.
 
 ## Planned relocation diagnostic (iteration 25)
 
@@ -114,8 +117,10 @@ current-generation source Secondary / target Primary, restored VM Halted,
 64 MiB disk size and exact marker read at 1 MiB by a restricted read-only pod.
 The reader was removed after success. **This proves recovery can read replicated
 data and restore the halted VM object, not complete source cleanup or a running
-VM failover.** Source finalizers remain untouched; `Protected=False` and cleanup
-remain unresolved rather than being hidden behind the partial-run recap.
+VM failover.** At the end of that diagnostic, source finalizers were untouched;
+`Protected=False` and cleanup remained unresolved rather than being hidden behind
+the partial-run recap. The later authorized infrastructure teardown removed the
+old clusters; it did not establish successful diagnostic source-PVC cleanup.
 
 Sources:
 - [ODF 4.22 Regional DR guide, section 4.11](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index)

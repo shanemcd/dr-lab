@@ -5,8 +5,10 @@
 The real compact-cluster rebuild is live: one ACM hub and two three-master
 OpenShift 4.22.16 ARM64 clusters. Both sites passed standard ODF provisioning,
 Submariner application traffic, authenticated remote S3 with verified TLS,
-and current ODF Regional-DR peering/policy gates. These do **not** establish
-successful VM execution, protected VM recovery, or full one-shot redeployment.
+and current ODF Regional-DR peering/policy gates. A full teardown and single
+untagged infrastructure redeployment subsequently passed on 2026-10-28; see
+[rebuild validation](rebuild-validation.md). Neither infrastructure checks nor
+that rebuild establish successful VM execution or running-VM recovery.
 
 The physical host is Ampere Altra Q80-30 / Neoverse-N1, aarch64. Its OpenShift
 nodes are first-level KVM guests. All primary nodes advertise
@@ -88,6 +90,33 @@ components to hide this conflict. A halted VM can still exercise object/disk
 protection, but it cannot satisfy running-VM failover acceptance. Suitable KVM
 hardware (or an explicit change to acceptance) is required unless a supported
 execution path is established independently.
+
+## Resuming the remaining acceptance work
+
+Leave the verified infrastructure intact until replacement hardware and a
+migration plan are agreed. More memory, more masters, and another installation
+on this host will not resolve the observed execution failure.
+
+A candidate environment must first demonstrate usable KVM in the OpenShift
+nodes, not merely advertise ARM64 or accept the emulation setting. Options are
+bare-metal nodes or a host/CPU/kernel combination that actually exposes nested
+virtualization to the node guests. A different architecture requires matching
+OpenShift artifacts, manifests and workload images; this repository's ARM64 pins
+must not simply be reused. These are prerequisites, not a support certification.
+
+On an agreed target, the outstanding acceptance sequence is:
+
+1. Verify node KVM exposure and run the minimal stock VM through normal admission;
+   observe the VMI Running and Ready, not just scheduled or an available HCO.
+2. Protect a PVC-backed test VM using the installed DR policy and observe current
+   disk and object-protection checkpoints before inducing a site outage.
+3. Establish real source isolation/fencing before requesting unplanned failover;
+   never synthesize fencing status or permit simultaneous source/target writers.
+4. Observe the recovered VMI Running and Ready on recovery, verify its disk data,
+   and record the operation and cleanup results separately from infrastructure.
+
+No VM execution or failover pass is recorded yet. The stopped-VM diagnostic and
+its unresolved source-PVC cleanup are not substitutes for this sequence.
 
 ## Hardware references
 
