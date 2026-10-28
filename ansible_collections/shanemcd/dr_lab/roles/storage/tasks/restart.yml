@@ -4,6 +4,7 @@
 - name: Shut down the spoke VM
   ansible.builtin.command:
     argv: [virsh, -c, "{{ libvirt_uri }}", shutdown, "{{ storage_node.name }}"]
+  changed_when: true
 
 - name: Wait for the VM to reach the shut-off state
   ansible.builtin.command:
@@ -17,6 +18,7 @@
 - name: Start the spoke VM again
   ansible.builtin.command:
     argv: [virsh, -c, "{{ libvirt_uri }}", start, "{{ storage_node.name }}"]
+  changed_when: true
 
 - name: Wait for the cluster API to come back
   ansible.builtin.uri:

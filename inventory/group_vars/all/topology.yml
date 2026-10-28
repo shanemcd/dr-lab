@@ -16,8 +16,8 @@ mac_base: "52:54:00:0d:0d"
 
 # Per-node specs. Hub runs the ACM stack eventually, so it gets headroom;
 # workload SNOs get more (they will carry OpenShift Virtualization + ODF).
-sno_vcpu: 12
-sno_ram: "48G"
+sno_vcpu: 20
+sno_ram: "64G"
 sno_disk: "200G"
 
 clusters:

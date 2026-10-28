@@ -8,9 +8,9 @@ storage_clusters:
   - dr-primary
   - dr-recovery
 
-# Extra virtio disks per spoke VM: one lands the mon PVC (10Gi request,
-# whole-disk PV), three land the OSD PVCs. Equal sizes keep the
-# LocalVolumeSet binding simple — every disk can serve either role.
+# Extra virtio disks per spoke VM: three land the OSD PVCs via LSO; the
+# mon runs from a hostPath (compact SNO pattern). Equal sizes keep the
+# LocalVolumeSet binding simple.
 storage_disk_size: 100G
 storage_disk_prefix: osd
 
@@ -31,3 +31,17 @@ storage_local_devices:
   - /dev/vdc
   - /dev/vdd
   - /dev/vde
+
+# StorageClass the LocalVolumeSet provisions (whole raw devices, Block
+# volume mode) — consumed by the mon + OSD PVC templates below.
+storage_lso_storageclass: localblock
+
+# Single-node StorageCluster sizing: mon runs from a hostPath
+# (monDataDirHostPath), three replica-1 OSDs on localblock.
+storage_osd_count: 3
+storage_odf_operatorgroup: odf-operatorgroup
+
+# LSO discovery window: selects the 100G data disks and nothing else
+# (the 200G install disk vda falls outside).
+storage_lso_min_size: 99Gi
+storage_lso_max_size: 101Gi
