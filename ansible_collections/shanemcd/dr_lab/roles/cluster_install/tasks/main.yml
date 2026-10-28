@@ -1,37 +1,34 @@
 ---
-# cluster_install: drive each bootstrap-in-place SNO to a converged
-# single-node state. By the time this role runs the BiP install is
-# already underway — the node installed itself from the live ISO and
-# rebooted into the installed master. Per cluster: wait for the installed
-# API server, heal the machine-os-puller pivot race (if present), assert
-# masters stay schedulable (SNO — never changed), wait for the cluster
-# operators to settle, and assert the final state: the single node Ready,
-# clusteroperators Available, clusterversion Available, node osImageURL ==
-# the pinned payload machine-os-content. No stamps: every step is
-# naturally idempotent. Re-runs on a converged cluster are near-instant.
+- name: Ensure installer helper directory
+  ansible.builtin.file:
+    path: "{{ vm_scripts_dir }}"
+    state: directory
+    mode: '0755'
 
-- name: Stat the per-cluster auth artifacts
+- name: Install scoped CSR approval and installer wait helpers
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ vm_scripts_dir }}/{{ item }}"
+    mode: '0755'
+  loop: [approve-node-csrs.py, wait-install.py]
+
+- name: Inspect cluster credentials
   ansible.builtin.stat:
     path: "{{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
-  loop: "{{ lab_nodes }}"
-  loop_control:
-    label: "{{ item.name }}"
+  loop: "{{ clusters }}"
   register: cluster_install_kubeconfig_stat
 
-- name: Assert the per-cluster auth artifacts exist
+- name: Require generated cluster credentials
   ansible.builtin.assert:
-    that:
-      - item.stat.exists
-    fail_msg: >-
-      {{ install_base_dir }}/{{ item.item.name }}/auth/kubeconfig missing —
-      run 04_ignition.yml first (the installer writes the auth artifacts
-      with the BiP ignition).
+    that: item.stat.exists
+    fail_msg: "Missing kubeconfig for {{ item.item.name }}; run 04_ignition first."
   loop: "{{ cluster_install_kubeconfig_stat.results }}"
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: Converge each SNO cluster
+- name: Converge each cluster
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ lab_nodes }}"
+  loop: "{{ clusters }}"
   loop_control:
-    loop_var: sno_node
+    loop_var: install_cluster
+    label: "{{ install_cluster.name }}"

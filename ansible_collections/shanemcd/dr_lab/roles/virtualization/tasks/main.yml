@@ -3,14 +3,14 @@
   ansible.builtin.assert:
     that:
       - virtualization_clusters | length >= 1
-      - virtualization_clusters | difference(lab_nodes | map(attribute='name') | list) | length == 0
+      - virtualization_clusters | difference(clusters | map(attribute='name') | list) | length == 0
     fail_msg: >-
       virtualization_clusters must name existing clusters; found
       {{ virtualization_clusters | default([]) }} vs topology
-      {{ lab_nodes | map(attribute='name') | list }}.
+      {{ clusters | map(attribute='name') | list }}.
 
 - name: Layer OpenShift Virtualization on the target clusters
   ansible.builtin.include_tasks: cluster.yml
-  loop: "{{ lab_nodes | selectattr('name', 'in', virtualization_clusters) | list }}"
+  loop: "{{ clusters | selectattr('name', 'in', virtualization_clusters) | list }}"
   loop_control:
     loop_var: sno_node

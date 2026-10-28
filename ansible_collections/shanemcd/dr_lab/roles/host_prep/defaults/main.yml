@@ -26,7 +26,7 @@ host_prep_disk_headroom_gib: 30
 # 0700, matching the install_config role's secrets gate.
 host_prep_workspace_dirs: >-
   {{ [{'path': install_base_dir, 'mode': '0700'}]
-     + (lab_nodes | map(attribute='name') | map('regex_replace', '^(.*)$', install_base_dir ~ '/\1')
+     + (clusters | map(attribute='name') | map('regex_replace', '^(.*)$', install_base_dir ~ '/\1')
         | map('community.general.dict_kv', 'path') | map('combine', {'mode': '0700'}) | list)
      + [{'path': verification_dir, 'mode': '0700'},
         {'path': vm_assets_dir, 'mode': '0755'},

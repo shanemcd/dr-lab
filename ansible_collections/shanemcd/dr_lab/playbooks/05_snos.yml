@@ -1,5 +1,5 @@
 ---
-- name: SNO VM stage (define and start the three BiP guests)
+- name: Cluster VM stage (hub, compact masters and temporary bootstraps)
   hosts: all
   become: true
   gather_facts: false
@@ -10,6 +10,10 @@
         name: shanemcd.dr_lab.workspace
 
   tasks:
+    - name: Configure API and ingress load balancing before starting guests
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.loadbalancer
+
     - name: Run the vms role
       ansible.builtin.import_role:
         name: shanemcd.dr_lab.vms

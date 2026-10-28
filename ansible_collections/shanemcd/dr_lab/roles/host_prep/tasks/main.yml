@@ -26,7 +26,7 @@
 - name: Assert the generated node topology is sane
   ansible.builtin.assert:
     that:
-      - lab_nodes | length == clusters | length
+      - lab_nodes | map(attribute='cluster') | unique | sort == clusters | map(attribute='name') | sort
       - lab_nodes | length >= 1
       - lab_nodes | map(attribute='ip_suffix') | list
         | length == lab_nodes | map(attribute='ip_suffix') | unique | list | length
@@ -34,18 +34,19 @@
         < network_dhcp_range_start_suffix
       - lab_nodes | map(attribute='name') | list
         | length == lab_nodes | map(attribute='name') | unique | list | length
-      - lab_nodes | map(attribute='domain') | list
-        | length == lab_nodes | map(attribute='domain') | unique | list | length
+      - >-
+        (lab_nodes + bootstrap_nodes) | map(attribute='ip_suffix') | unique | length
+        == (lab_nodes + bootstrap_nodes) | length
     fail_msg: >-
-      The generated topology is inconsistent: each cluster needs exactly one
-      node, IP suffixes/names/domains unique, IP suffixes below the dnsmasq
+      The generated topology is inconsistent: each cluster needs nodes,
+      IP suffixes and node names must be unique, IP suffixes below the dnsmasq
       free range start ({{ network_dhcp_range_start_suffix }}). Check
       topology.yml.
 
 - name: Set the per-node RAM specs for the committed-RAM measure
   ansible.builtin.set_fact:
     host_prep_node_mem_specs: >-
-      {% for n in lab_nodes %}{{ n.name }}={{ n.ram | regex_replace('G$', '') }} {% endfor %}
+      {% for n in lab_nodes + bootstrap_nodes %}{{ n.name }}={{ n.ram | regex_replace('G$', '') }} {% endfor %}
 
 - name: Measure guest RAM already committed by running lab VMs
   # Resume path (observed live): a mid-install re-run with part of the
@@ -61,12 +62,9 @@
     for spec in {{ host_prep_node_mem_specs }}; do
       name="${spec%%=*}"
       gib="$(( ${spec#*=} ))"
-      pidfile="{{ vm_run_dir }}/${name}.pid"
-      [ -r "${pidfile}" ] || continue
-      pid="$(cat "${pidfile}" 2>/dev/null || true)"
-      if [ -z "${pid}" ] || ! kill -0 "${pid}" 2>/dev/null; then
-        continue
-      fi
+      command -v virsh >/dev/null || continue
+      state=$(LC_ALL=C virsh -c {{ libvirt_uri | quote }} domstate "$name" 2>/dev/null || true)
+      [ "$state" = 'running' ] || continue
       committed=$(( committed + gib ))
     done
     echo "${committed}"
@@ -76,11 +74,13 @@
 - name: Compute guest resource requirements
   ansible.builtin.set_fact:
     host_prep_required_mem_gib: >-
-      {{ lab_nodes | map(attribute='ram') | map('regex_replace', 'G$', '') | map('int') | sum }}
+      {{ (lab_nodes + bootstrap_nodes) | map(attribute='ram') | map('regex_replace', 'G$', '') | map('int') | sum }}
     host_prep_required_vcpu: >-
-      {{ lab_nodes | map(attribute='vcpu') | sum }}
+      {{ (lab_nodes + bootstrap_nodes) | map(attribute='vcpu') | sum }}
     host_prep_required_disk_gib: >-
-      {{ lab_nodes | map(attribute='disk') | map('regex_replace', 'G$', '') | map('int') | sum }}
+      {{ ((lab_nodes + bootstrap_nodes) | map(attribute='disk') | map('regex_replace', 'G$', '') | map('int') | sum)
+         + (lab_nodes | map(attribute='data_disk') | reject('equalto', None)
+            | map('regex_replace', 'G$', '') | map('int') | sum) }}
     host_prep_available_mem_gib: >-
       {{ (ansible_facts['memory_mb']['nocache']['free'] / 1024)
          + (host_prep_running_vm_mem.stdout | int) }}

@@ -1,207 +1,136 @@
 ---
-# Converge exactly one SNO cluster ({{ sno_node.name }}). Paths derive
-# from cluster_name (see paths.yml). KUBECONFIG is passed per command via
-# environment — deliberately `oc` and not kubernetes.core.k8s: the k8s
-# action plugin reads the kubeconfig on the controller as the invoking
-# user, but the installer's auth dir is root-owned 0700 (hardened).
-
-- name: Set per-cluster facts
+- name: Set cluster identity
   ansible.builtin.set_fact:
-    cluster_name: "{{ sno_node.name }}"
-    cluster_node_name: "{{ sno_node.name }}"
-    cluster_kubeconfig: "{{ install_base_dir }}/{{ sno_node.name }}/auth/kubeconfig"
+    cluster_name: "{{ install_cluster.name }}"
+    cluster_kubeconfig: "{{ install_base_dir }}/{{ install_cluster.name }}/auth/kubeconfig"
+    cluster_install_members: "{{ lab_nodes | selectattr('cluster', 'equalto', install_cluster.name) | list }}"
 
-- name: Wait for the installed API server to be ready
-  # First cluster touch: right after the BiP install settles, the API
-  # server can still be warming up and time out individual requests
-  # (observed live: a plain `oc get sa` failing with a 60s server-side
-  # Timeout). Poll readyz. Long window: from VM start this covers the
-  # whole live-env bootstrap + install-to-disk + first boot (re-runs on a
-  # converged cluster return immediately).
+- name: Build allowed certificate identities
+  ansible.builtin.set_fact:
+    cluster_install_identities: >-
+      {{ dict(cluster_install_members | map(attribute='name')
+         | zip(cluster_install_members | map(attribute='ip'))) }}
+
+- name: Inspect bootstrap completion
+  ansible.builtin.stat:
+    path: "{{ install_base_dir }}/{{ cluster_name }}/bootstrap-complete"
+  register: cluster_install_bootstrap_marker
+
+- name: Wait for compact bootstrap completion while approving inventory node CSRs
   ansible.builtin.command:
     argv:
+      - python3
+      - "{{ vm_scripts_dir }}/wait-install.py"
+      - "{{ install_bin_dir }}/openshift-install"
+      - "{{ install_base_dir }}/{{ cluster_name }}"
+      - bootstrap-complete
       - "{{ install_bin_dir }}/oc"
-      - get
-      - "--raw=/readyz"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_api_ready
-  until: cluster_install_api_ready.rc == 0
-  retries: "{{ cluster_install_api_ready_retries }}"
-  delay: "{{ cluster_install_api_ready_delay_seconds }}"
-  changed_when: false
-
-- name: Read the machine-os-puller SA registry-secret annotation
-  # BiP pivot race (observed live, 4.22.16): the SA gets
-  # internal-registry-pull-secret-ref pointing at a dockercfg secret the
-  # openshift-controller-manager never created (it restarted across the
-  # live-env → installed transition); the machine-config operator then
-  # fails every resync on the missing secret. Dropping the stale
-  # annotation lets the resync complete — the annotation is optional.
-  # Retried: the single-node API can briefly time out under post-install
-  # load — observed live.
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - get
-      - sa
-      - "{{ cluster_install_mos_puller_sa }}"
-      - "-n"
-      - "{{ cluster_install_mco_namespace }}"
-      - "-o"
-      - "jsonpath={.metadata.annotations.openshift\\.io/internal-registry-pull-secret-ref}"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_mos_puller_annotation
-  until: cluster_install_mos_puller_annotation.rc == 0
-  retries: "{{ cluster_install_api_ready_retries }}"
-  delay: "{{ cluster_install_api_ready_delay_seconds }}"
-  changed_when: false
-
-- name: Drop the stale machine-os-puller registry-secret annotation
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - annotate
-      - sa
-      - "{{ cluster_install_mos_puller_sa }}"
-      - "-n"
-      - "{{ cluster_install_mco_namespace }}"
-      - "openshift.io/internal-registry-pull-secret-ref-"
+      - "{{ cluster_install_identities | to_json }}"
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   when:
-    - cluster_install_mos_puller_annotation.stdout | trim | length > 0
-  register: cluster_install_mos_puller_fix
+    - install_cluster.install_flavor == 'compact'
+    - not cluster_install_bootstrap_marker.stat.exists
   changed_when: true
 
-- name: Read the scheduler mastersSchedulable setting
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - get
-      - scheduler
-      - cluster
-      - "-o"
-      - "jsonpath={.spec.mastersSchedulable}"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_schedulable
-  changed_when: false
+- name: Record confirmed bootstrap completion
+  ansible.builtin.copy:
+    content: "Installer confirmed bootstrap-complete.\n"
+    dest: "{{ install_base_dir }}/{{ cluster_name }}/bootstrap-complete"
+    mode: '0600'
+    force: false
+  when: install_cluster.install_flavor == 'compact'
 
-- name: Assert the master stays schedulable (SNO)
+- name: Remove completed bootstrap from the load balancer
+  ansible.builtin.include_role:
+    name: shanemcd.dr_lab.loadbalancer
+  when: install_cluster.install_flavor == 'compact'
+
+- name: Inspect temporary bootstrap domain
+  ansible.builtin.command:
+    argv: [virsh, '-c', "{{ libvirt_uri }}", list, '--all', '--name']
+  register: cluster_install_domains
+  changed_when: false
+  when: install_cluster.install_flavor == 'compact'
+
+- name: Read bootstrap domain ownership
+  ansible.builtin.command:
+    argv: [virsh, '-c', "{{ libvirt_uri }}", domuuid, "{{ cluster_name }}-bootstrap"]
+  register: cluster_install_bootstrap_uuid
+  changed_when: false
+  when:
+    - install_cluster.install_flavor == 'compact'
+    - cluster_name ~ '-bootstrap' in cluster_install_domains.stdout_lines
+
+- name: Refuse to remove an unrelated bootstrap domain
   ansible.builtin.assert:
-    that:
-      - cluster_install_schedulable.stdout | trim | lower == (masters_schedulable | bool | lower)
-    fail_msg: >-
-      {{ cluster_name }}: mastersSchedulable is
-      {{ cluster_install_schedulable.stdout | trim }} but the taxonomy says
-      {{ masters_schedulable }} — the SNO master must stay schedulable
-      (single node runs the workload).
-    success_msg: >-
-      {{ cluster_name }}: master schedulable ({{ masters_schedulable }}) — SNO OK.
+    that: cluster_install_bootstrap_uuid.stdout | trim == ((cluster_name ~ '-bootstrap') | to_uuid)
+  when:
+    - install_cluster.install_flavor == 'compact'
+    - cluster_name ~ '-bootstrap' in cluster_install_domains.stdout_lines
 
-- name: Wait for cluster operators to settle
-  # One poller over the whole operator table: green when every operator
-  # reports Available=True and Degraded=False. cluster-api is excluded:
-  # on platform=None installs (bootstrap-in-place) its
-  # CoreClusterController cannot map the platform to a CAPI
-  # infrastructure-cluster kind, so the operator stays Progressing with
-  # reason Uninitialized forever — upstream steady state, not a fault.
+- name: Stop completed bootstrap if running
   ansible.builtin.shell: |
-    set -o pipefail
-    bad=$("{{ install_bin_dir }}/oc" get clusteroperators --no-headers 2>/dev/null \
-      | awk '$1 != "cluster-api" && ($3 != "True" || $5 == "True")' | wc -l)
-    if [ "${bad}" -gt 0 ]; then
-      "{{ install_bin_dir }}/oc" get clusteroperators --no-headers 2>/dev/null \
-        | awk '$1 != "cluster-api" && ($3 != "True" || $5 == "True") {print $1"("$3"/"$5")"}' >&2
-      exit 1
+    set -euo pipefail
+    state=$(virsh -c {{ libvirt_uri | quote }} domstate {{ (cluster_name ~ '-bootstrap') | quote }})
+    if [ "$state" != 'shut off' ]; then
+      virsh -c {{ libvirt_uri | quote }} destroy {{ (cluster_name ~ '-bootstrap') | quote }}
+      echo STOPPED
     fi
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_operators
-  until: cluster_install_operators.rc == 0
-  retries: "{{ cluster_install_operator_retries }}"
-  delay: "{{ cluster_install_operator_delay_seconds }}"
-  changed_when: false
+  environment: {LC_ALL: C}
+  register: cluster_install_bootstrap_stop
+  changed_when: "'STOPPED' in cluster_install_bootstrap_stop.stdout"
+  when:
+    - install_cluster.install_flavor == 'compact'
+    - cluster_name ~ '-bootstrap' in cluster_install_domains.stdout_lines
 
-- name: Read cluster node states
-  # Retried: a freshly-installed SNO API server can briefly time out on
-  # list requests while post-install rollouts (MCO, router) still churn.
+- name: Undefine completed bootstrap including UEFI variables
+  ansible.builtin.command:
+    argv: [virsh, '-c', "{{ libvirt_uri }}", undefine, "{{ cluster_name }}-bootstrap", '--nvram']
+  when:
+    - install_cluster.install_flavor == 'compact'
+    - cluster_name ~ '-bootstrap' in cluster_install_domains.stdout_lines
+  changed_when: true
+
+- name: Wait for installer-confirmed cluster completion
   ansible.builtin.command:
     argv:
+      - python3
+      - "{{ vm_scripts_dir }}/wait-install.py"
+      - "{{ install_bin_dir }}/openshift-install"
+      - "{{ install_base_dir }}/{{ cluster_name }}"
+      - install-complete
       - "{{ install_bin_dir }}/oc"
-      - get
-      - nodes
-      - "--no-headers"
+      - "{{ cluster_install_identities | to_json }}"
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  changed_when: false
+
+- name: Read installed nodes
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, nodes, '-o', json, '--request-timeout=30s']
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   register: cluster_install_nodes
-  until: cluster_install_nodes.rc == 0
-  retries: 8
-  delay: 15
   changed_when: false
 
-- name: Read cluster version status
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - get
-      - clusterversion
-      - "--no-headers"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_cv
-  changed_when: false
-
-- name: Read the node's current MachineConfig
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - get
-      - node
-      - "{{ cluster_node_name }}"
-      - "-o"
-      - "jsonpath={.metadata.annotations.machineconfiguration\\.openshift\\.io/currentConfig}"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_current_mc
-  changed_when: false
-
-- name: Read the current MachineConfig osImageURL
-  ansible.builtin.command:
-    argv:
-      - "{{ install_bin_dir }}/oc"
-      - get
-      - machineconfig
-      - "{{ cluster_install_current_mc.stdout | trim }}"
-      - "-o"
-      - "jsonpath={.spec.osImageURL}"
-  environment:
-    KUBECONFIG: "{{ cluster_kubeconfig }}"
-  register: cluster_install_osimage
-  changed_when: false
-
-- name: Assert the installed cluster state ({{ cluster_name }})
+- name: Require exactly the inventory nodes and Ready condition on each
   ansible.builtin.assert:
     that:
-      - cluster_install_nodes.stdout_lines | length == 1
-      - cluster_install_nodes.stdout_lines[0] is search('\sReady\s')
-      - cluster_install_cv.stdout is search('True')
-      # node booted a payload machine-os-content image (non-empty digest ref)
-      - cluster_install_osimage.stdout | trim | length > 0
-    fail_msg: >-
-      {{ cluster_name }} state check failed — nodes:
-      {{ cluster_install_nodes.stdout_lines | default([]) }},
-      clusterversion: {{ cluster_install_cv.stdout | default('') }},
-      node osImageURL: {{ cluster_install_osimage.stdout | default('') | trim }}.
-    success_msg: >-
-      {{ cluster_name }} live — node Ready, operators Available,
-      clusterversion Available ({{ ocp_version }}).
+      - >-
+        (cluster_install_nodes.stdout | from_json)['items'] | map(attribute='metadata.name') | sort
+        == cluster_install_members | map(attribute='name') | sort
+      - >-
+        (cluster_install_nodes.stdout | from_json)['items'] | map(attribute='status.conditions') | flatten
+        | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list
+        | length == cluster_install_members | length
+    fail_msg: "{{ cluster_name }} did not converge to the inventory membership."
 
-- name: Cluster install summary
-  ansible.builtin.debug:
-    msg: >-
-      {{ cluster_name }} install OK — node Ready (SNO master schedulable),
-      operators Available, clusterversion Available ({{ ocp_version }}),
-      node osImageURL populated; console at {{ console_url }}.
+- name: Confirm compact and SNO masters remain schedulable
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, scheduler, cluster, '-o', 'jsonpath={.spec.mastersSchedulable}']
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: cluster_install_scheduler
+  changed_when: false
+  failed_when: cluster_install_scheduler.stdout | trim != 'true'
