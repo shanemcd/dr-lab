@@ -1,75 +1,159 @@
 ---
-# Node topology: three independent single-node OpenShift clusters (SNOs),
-# one libvirt VM each, all on this host. Each cluster gets its own:
-#   - cluster name / DNS domain ({{ name }}.{{ base_domain }})
-#   - stable IP + MAC (DHCP reservation)
-#   - pod CIDR and service CIDR (must be unique per cluster AND not overlap
-#     the lab subnet)
-# MACs derive as {{ mac_base }}:{{ item.mac_suffix }} with mac_suffix the
-# hex of the node's ip_suffix; IPs as {{ lab_subnet_prefix }}.{{ item.ip_suffix }}.
+# Node topology: one SNO hub + two 3-master compact OpenShift clusters,
+# all VMs on this host, all on the single lab network (192.168.126.0/24).
 #
-# Fleet roles (mirroring the ocp-lab DR architecture):
-#   dr-hub       - future ACM management hub
-#   dr-primary   - primary workload site
-#   dr-recovery  - recovery workload site
+# Fleet roles (mirroring the ocp-lab / Regional-DR reference architecture):
+#   dr-hub       - ACM management hub. Single node (SNO, bootstrap-in-place).
+#                  Runs no ODF; needs no VIP or load balancer.
+#   dr-primary   - primary workload site. 3-master compact cluster (masters
+#                  schedulable, no workers) with real internal ODF on local
+#                  data disks.
+#   dr-recovery  - recovery workload site. Same shape as dr-primary.
+#
+# Compact clusters install via the real UPI flow: a transient bootstrap VM
+# per cluster, an API/ingress VIP on the lab bridge served by haproxy on the
+# host (6443/22623 -> bootstrap during install, then masters; 80/443 ->
+# masters), and per-master ignition baked through fw_cfg (master.ign merged
+# with the node's NM keyfile/hostname — no machine-config-server dependency
+# at boot).
+#
+# Every VM gets a stable IP + MAC (DHCP reservation). MACs derive as
+# {{ mac_base }}:{{ '%02x' % ip_suffix }}; IPs as
+# {{ lab_subnet_prefix }}.{{ ip_suffix }}. Pod/service CIDRs are unique per
+# cluster and never overlap the lab subnet.
 mac_base: "52:54:00:0d:0d"
 
-# Per-node specs. Hub runs the ACM stack eventually, so it gets headroom;
-# workload SNOs get more (they will carry OpenShift Virtualization + ODF).
-sno_vcpu: 20
-sno_ram: "64G"
-sno_disk: "200G"
+# --- compact-cluster node sizing ------------------------------------------
+# Masters carry the control plane + ODF + virtualization: generously sized.
+compact_master_vcpu: 10
+compact_master_ram: "40G"
+compact_master_disk: "120G"      # root disk (OS + image cache)
+compact_master_data_disk: "120G" # ODF disk -> /dev/vdb -> localblock PVs
+
+# --- bootstrap (transient) node sizing ------------------------------------
+bootstrap_vcpu: 4
+bootstrap_ram: "16G"
+bootstrap_disk: "60G"
+
+# --- hub SNO sizing --------------------------------------------------------
+hub_vcpu: 12
+hub_ram: "40G"
+hub_disk: "200G"
 
 clusters:
   - name: dr-hub
     role: hub
+    install_flavor: "sno"       # bootstrap-in-place single master
     ip_suffix: 11
-    vcpu: "{{ sno_vcpu }}"
-    ram: "{{ sno_ram }}"
-    disk: "{{ sno_disk }}"
+    vcpu: "{{ hub_vcpu }}"
+    ram: "{{ hub_ram }}"
+    disk: "{{ hub_disk }}"
     cluster_network_cidr: "10.128.0.0/14"
     service_network_cidr: "172.30.0.0/16"
   - name: dr-primary
     role: primary
-    ip_suffix: 12
-    vcpu: "{{ sno_vcpu }}"
-    ram: "{{ sno_ram }}"
-    disk: "{{ sno_disk }}"
+    install_flavor: "compact"   # 3 masters + transient bootstrap
+    api_vip_suffix: 12          # API + ingress VIP on the lab bridge
+    bootstrap_ip_suffix: 21     # transient bootstrap node
+    masters:
+      - { name_suffix: "m1", ip_suffix: 13 }
+      - { name_suffix: "m2", ip_suffix: 14 }
+      - { name_suffix: "m3", ip_suffix: 15 }
+    vcpu: "{{ compact_master_vcpu }}"
+    ram: "{{ compact_master_ram }}"
+    disk: "{{ compact_master_disk }}"
+    data_disk: "{{ compact_master_data_disk }}"
     cluster_network_cidr: "10.132.0.0/14"
     service_network_cidr: "172.31.0.0/16"
   - name: dr-recovery
     role: recovery
-    ip_suffix: 13
-    vcpu: "{{ sno_vcpu }}"
-    ram: "{{ sno_ram }}"
-    disk: "{{ sno_disk }}"
+    install_flavor: "compact"
+    api_vip_suffix: 16
+    bootstrap_ip_suffix: 22
+    masters:
+      - { name_suffix: "m1", ip_suffix: 17 }
+      - { name_suffix: "m2", ip_suffix: 18 }
+      - { name_suffix: "m3", ip_suffix: 19 }
+    vcpu: "{{ compact_master_vcpu }}"
+    ram: "{{ compact_master_ram }}"
+    disk: "{{ compact_master_disk }}"
+    data_disk: "{{ compact_master_data_disk }}"
     cluster_network_cidr: "10.136.0.0/14"
     service_network_cidr: "172.32.0.0/16"
 
-# Flat node list shared by network/vms/install_config roles (each cluster
-# has exactly one node — the BiP master). mac_suffix is the hex of the
-# ip_suffix; node IP / cluster domain derive here so the roles share one
-# source of truth.
-sno_nodes: >-
+# --- derived node tables ---------------------------------------------------
+# lab_nodes: EVERY persistent VM (hub master + compact masters). One source
+# of truth for network (DHCP/DNS records), vms (domain definitions) and
+# install_config (per-node ignition merge). Fields:
+#   name, cluster, role ('hub-master' | 'master'), install_flavor,
+#   ip_suffix, mac_suffix, vcpu, ram, disk, data_disk (compact masters),
+#   domain (CLUSTER domain), ip, fqdn (node hostname)
+lab_nodes: >-
   {%- set out = [] -%}
   {%- for c in clusters -%}
-  {%- set _ = out.append({'name': c.name, 'role': c.role,
+  {%- if c.install_flavor == 'sno' -%}
+  {%- set _ = out.append({'name': c.name, 'cluster': c.name,
+        'role': 'hub-master', 'install_flavor': 'sno',
         'ip_suffix': c.ip_suffix, 'mac_suffix': '%02x' % c.ip_suffix,
-        'vcpu': c.vcpu, 'ram': c.ram, 'disk': c.disk,
+        'vcpu': c.vcpu, 'ram': c.ram, 'disk': c.disk, 'data_disk': None,
         'domain': c.name ~ '.' ~ base_domain,
         'cluster_network_cidr': c.cluster_network_cidr,
         'service_network_cidr': c.service_network_cidr,
-        'ip': lab_subnet_prefix ~ '.' ~ c.ip_suffix}) -%}
+        'ip': lab_subnet_prefix ~ '.' ~ c.ip_suffix,
+        'fqdn': c.name ~ '.' ~ base_domain}) -%}
+  {%- else -%}
+  {%- for m in c.masters -%}
+  {%- set _ = out.append({'name': c.name ~ '-' ~ m.name_suffix,
+        'cluster': c.name, 'role': 'master', 'install_flavor': 'compact',
+        'ip_suffix': m.ip_suffix, 'mac_suffix': '%02x' % m.ip_suffix,
+        'vcpu': c.vcpu, 'ram': c.ram, 'disk': c.disk, 'data_disk': c.data_disk,
+        'domain': c.name ~ '.' ~ base_domain,
+        'cluster_network_cidr': c.cluster_network_cidr,
+        'service_network_cidr': c.service_network_cidr,
+        'ip': lab_subnet_prefix ~ '.' ~ m.ip_suffix,
+        'fqdn': c.name ~ '-' ~ m.name_suffix ~ '.' ~ base_domain}) -%}
+  {%- endfor -%}
+  {%- endif -%}
   {%- endfor -%}
   {{ out }}
 
-# SNO: the single master is schedulable (it carries the ingress and
-# registry operators; the default IngressController is pinned to it).
+# bootstrap_nodes: transient install VMs (one per compact cluster). Only
+# defined during install; teardown must tolerate them existing at any time.
+bootstrap_nodes: >-
+  {%- set out = [] -%}
+  {%- for c in clusters if c.install_flavor == 'compact' -%}
+  {%- set _ = out.append({'name': c.name ~ '-bootstrap', 'cluster': c.name,
+        'ip_suffix': c.bootstrap_ip_suffix,
+        'mac_suffix': '%02x' % c.bootstrap_ip_suffix,
+        'vcpu': bootstrap_vcpu, 'ram': bootstrap_ram, 'disk': bootstrap_disk,
+        'domain': c.name ~ '.' ~ base_domain,
+        'ip': lab_subnet_prefix ~ '.' ~ c.bootstrap_ip_suffix,
+        'fqdn': c.name ~ '-bootstrap.' ~ base_domain}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# compact_clusters: convenience list of the two 3-master clusters, with
+# their VIP / bootstrap facts resolved.
+compact_clusters: >-
+  {%- set out = [] -%}
+  {%- for c in clusters if c.install_flavor == 'compact' -%}
+  {%- set _ = out.append({'name': c.name, 'role': c.role,
+        'api_vip': lab_subnet_prefix ~ '.' ~ c.api_vip_suffix,
+        'api_vip_suffix': c.api_vip_suffix,
+        'domain': c.name ~ '.' ~ base_domain,
+        'cluster_network_cidr': c.cluster_network_cidr,
+        'service_network_cidr': c.service_network_cidr,
+        'masters': lab_nodes | selectattr('cluster', 'equalto', c.name) | list,
+        'bootstrap': bootstrap_nodes | selectattr('cluster', 'equalto', c.name) | list}) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# Compact clusters: masters are schedulable (they carry ingress, registry
+# and — here — ODF and virtualization workloads).
 masters_schedulable: true
 
-# Bootstrap-in-place install target: the virtio disk the installer writes
-# the master to — interpolated into install-config (bootstrapInPlace.
-# installationDisk) and the aarch64 boot path.
+# SNO (dr-hub) bootstrap-in-place install target — the virtio disk the
+# installer writes the master to.
 bip_installation_disk: "/dev/vda"
 
 # Install-config cluster shape: no workers ever join these clusters.
@@ -81,6 +165,6 @@ cluster_fips: false
 ignition_fresh_window_hours: 12
 
 # Guest shutdown window (shared by vms start + teardown's fleet poller):
-# an SNO under load can take minutes to flush and power off gracefully.
+# a node under load can take minutes to flush and power off gracefully.
 vm_stop_wait_retries: 24
 vm_stop_wait_delay: 10
