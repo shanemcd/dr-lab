@@ -1,4 +1,7 @@
 ---
+- name: Configure cross-cluster ingress CA trust for Regional-DR metadata
+  ansible.builtin.import_tasks: trust.yml
+
 - name: Install GitOps on the hub and both DR sites before the orchestrator
   ansible.builtin.include_tasks: operator.yml
   loop: "{{ [acm_cluster] + acm_spokes }}"

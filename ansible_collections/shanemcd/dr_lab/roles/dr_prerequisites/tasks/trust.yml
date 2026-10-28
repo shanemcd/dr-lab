@@ -1,0 +1,33 @@
+---
+# ODF 4.22 Regional-DR guide section 4.7. Keep any existing custom proxy trust.
+- name: Read the ingress CA bundle from each DR site
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - configmap/default-ingress-cert
+      - -n
+      - openshift-config-managed
+      - -o
+      - 'jsonpath={.data.ca-bundle\.crt}'
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ item }}/auth/kubeconfig"
+  loop: "{{ acm_spokes }}"
+  register: dr_ingress_ca_results
+  changed_when: false
+
+- name: Require populated PEM trust for every DR site
+  ansible.builtin.assert:
+    that:
+      - "'-----BEGIN CERTIFICATE-----' in item.stdout"
+      - "'-----END CERTIFICATE-----' in item.stdout"
+    fail_msg: "Ingress CA is not populated on {{ item.item }}; do not install empty trust."
+  loop: "{{ dr_ingress_ca_results.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Merge and configure trust on the hub and both sites
+  ansible.builtin.include_tasks: trust-cluster.yml
+  loop: "{{ [acm_cluster] + acm_spokes }}"
+  loop_control:
+    loop_var: dr_trust_cluster

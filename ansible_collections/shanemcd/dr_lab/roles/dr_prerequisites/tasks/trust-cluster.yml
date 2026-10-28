@@ -1,0 +1,104 @@
+---
+- name: Resolve the trust target credentials
+  ansible.builtin.set_fact:
+    dr_trust_kubeconfig: "{{ install_base_dir }}/{{ dr_trust_cluster }}/auth/kubeconfig"
+
+- name: Read the current proxy trust reference
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, proxy/cluster, -o, json]
+  environment:
+    KUBECONFIG: "{{ dr_trust_kubeconfig }}"
+  register: dr_proxy_before
+  changed_when: false
+
+- name: Resolve the existing custom trust config map name
+  ansible.builtin.set_fact:
+    dr_existing_ca_name: "{{ (dr_proxy_before.stdout | from_json).spec.trustedCA.name | default('') }}"
+    dr_existing_ca_pem: ""
+
+- name: Preserve the currently configured custom CA bundle
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - "configmap/{{ dr_existing_ca_name }}"
+      - -n
+      - openshift-config
+      - -o
+      - 'jsonpath={.data.ca-bundle\.crt}'
+  environment:
+    KUBECONFIG: "{{ dr_trust_kubeconfig }}"
+  register: dr_previous_ca
+  when: dr_existing_ca_name | length > 0
+  changed_when: false
+
+- name: Remember the existing CA data
+  ansible.builtin.set_fact:
+    dr_existing_ca_pem: "{{ dr_previous_ca.stdout }}"
+  when: dr_existing_ca_name | length > 0
+
+- name: Inspect ownership before replacing the lab trust config map
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - "configmap/{{ dr_trust_bundle_name }}"
+      - -n
+      - openshift-config
+      - --ignore-not-found
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ dr_trust_kubeconfig }}"
+  register: dr_managed_ca_before
+  changed_when: false
+
+- name: Refuse to overwrite an unrelated trust resource
+  ansible.builtin.assert:
+    that:
+      - >-
+        dr_managed_ca_before.stdout | length == 0 or
+        (dr_managed_ca_before.stdout | from_json).metadata.labels['dr-lab/managed'] | default('') == 'true'
+    fail_msg: "{{ dr_trust_bundle_name }} already exists without the dr-lab ownership label."
+
+- name: Build a stable de-duplicated union of existing and site certificates
+  vars:
+    dr_ca_newline: "\n"
+  ansible.builtin.set_fact:
+    dr_combined_ca_pem: >-
+      {{ ([dr_existing_ca_pem] + (dr_ingress_ca_results.results | map(attribute='stdout') | list))
+         | join(dr_ca_newline) | regex_findall('(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----')
+         | unique | join(dr_ca_newline) }}
+
+- name: Install the merged DR trust config map
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: {{ dr_trust_bundle_name }}
+        namespace: openshift-config
+        labels:
+          dr-lab/managed: "true"
+      data:
+        ca-bundle.crt: |
+      {{ dr_combined_ca_pem | indent(4, true) }}
+  environment:
+    KUBECONFIG: "{{ dr_trust_kubeconfig }}"
+  register: dr_ca_applied
+  changed_when: "'created' in dr_ca_applied.stdout or 'configured' in dr_ca_applied.stdout"
+
+- name: Configure the proxy trusted CA without replacing other proxy settings
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - patch
+      - proxy/cluster
+      - --type=merge
+      - -p
+      - "{{ {'spec': {'trustedCA': {'name': dr_trust_bundle_name}}} | to_json }}"
+  environment:
+    KUBECONFIG: "{{ dr_trust_kubeconfig }}"
+  when: dr_existing_ca_name != dr_trust_bundle_name
+  changed_when: true

@@ -5,3 +5,4 @@ dr_gitops_channel: latest
 dr_orchestrator_package: odf-multicluster-orchestrator
 dr_orchestrator_channel: stable-4.22
 dr_operator_timeout_seconds: 1200
+dr_trust_bundle_name: dr-lab-regional-dr-ca
