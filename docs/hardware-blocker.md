@@ -55,6 +55,40 @@ reported `aarch64`, QEMU `10.1.0 (qemu-kvm-10.1.0-17.el9_8.5)`, and accelerators
 not a substantial workload. Actual target VMI execution and protected state must
 be observed; operator availability alone is insufficient.
 
+## Live ARM64 emulation attempt: blocked
+
+Both sites installed OpenShift Virtualization 4.22.12 normally (25 ready
+Deployments per site). The explicit emulation rerun passed with HCO-owned
+`developerConfiguration.useEmulation: true` observed on both sites. Neither
+result proves an executing VM.
+
+The reproduction manifest is [evidence/arm64-emulation-smoke.yaml](evidence/arm64-emulation-smoke.yaml).
+Create namespace `dr-vm-probe`, apply it, and inspect VMI conditions and events.
+It uses the verified ARM64 Fedora container-disk digest and no host networking,
+custom operator images or admission overrides. The temporary VMI was deleted
+after collecting the failure, to avoid endless retries.
+
+With `spec.domain.cpu.model: cortex-a57`, admission rejected it:
+
+```text
+The request is invalid: spec.domain.cpu.model: currently, host-passthrough is the only model supported on Arm64
+```
+
+With the CPU model omitted, admission defaulted it to `host-passthrough`.
+The VMI scheduled on `dr-primary-m2` but remained `Ready=False` and could not
+execute. Its warning event was:
+
+```text
+server error. command SyncVMI failed: "LibvirtError(Code=67, Domain=10, Message='unsupported configuration: CPU mode 'host-passthrough' for aarch64 qemu domain on aarch64 host is not supported by hypervisor')"
+```
+
+Thus the stock ARM64 API requires a CPU mode that libvirt cannot use with TCG.
+The lab will not bypass validation, mutate generated domains or replace vendor
+components to hide this conflict. A halted VM can still exercise object/disk
+protection, but it cannot satisfy running-VM failover acceptance. Suitable KVM
+hardware (or an explicit change to acceptance) is required unless a supported
+execution path is established independently.
+
 ## Hardware references
 
 - [Ampere nested virtualization discussion](https://community.amperecomputing.com/t/issues-with-openstack-instance-creation-and-nested-virtualization-on-arm-host-with-qemu/1050)

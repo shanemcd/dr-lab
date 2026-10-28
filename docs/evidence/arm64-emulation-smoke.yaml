@@ -1,0 +1,27 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  name: arm64-emulation-smoke
+  namespace: dr-vm-probe
+spec:
+  architecture: arm64
+  domain:
+    cpu:
+      cores: 1
+    resources:
+      requests:
+        memory: 1Gi
+    firmware:
+      bootloader:
+        efi:
+          secureBoot: false
+    devices:
+      autoattachPodInterface: false
+      disks:
+        - name: root
+          disk:
+            bus: virtio
+  volumes:
+    - name: root
+      containerDisk:
+        image: quay.io/containerdisks/fedora@sha256:6ad8b75a658a05e8f0952778141921e1677f981e96f88237f417d7454435b9b5
