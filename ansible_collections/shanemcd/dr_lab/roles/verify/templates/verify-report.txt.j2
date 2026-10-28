@@ -1,12 +1,16 @@
 DR LAB VERIFICATION REPORT
 STAMP: test-only lab.
+SCOPE: host and OpenShift core state only. Add-on stages have separate gates.
+This report does not prove running-VM execution, DR failover, or a successful
+full teardown and one-shot redeployment. Consult the deployment logs and
+hardware-blocker / halted-vm-protection documentation for those limitations.
 
 HOST GATES
 {% for r in verify_domain_state.results %}
 {{ r.item.name }}: domain {{ r.stdout | default('') | trim }}
 {% endfor %}
 
-CLUSTER STATE (per SNO)
+CLUSTER STATE (hub SNO and compact spoke clusters)
 {% for name, c in verify_cluster_report.items() %}
 --- {{ name }} ---
 nodes: {{ c.nodes | join('; ') }}
