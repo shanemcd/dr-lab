@@ -1,4 +1,29 @@
-# Compact storage design (not yet live-validated)
+# Compact storage design (live validation in progress)
+
+## Initial runtime findings (2026-10-28)
+
+- Ten vCPUs per compact node was insufficient: default RGW and NooBaa core
+  pods remained Pending with `3 Insufficient cpu`. Inventory now allocates
+  20 vCPUs per compact node (132 steady-state lab vCPUs; 140 with bootstraps,
+  within the host's 160 cores). Default operator resource requests are retained.
+- Applied the sizing change to the existing six guests by graceful shutdown,
+  persistent libvirt vCPU change, and restart, one node at a time. Each node
+  returned Ready with capacity 20 and all three etcd pods Ready before the
+  next shutdown. One shutdown exceeded the initial 120-second bound; it was
+  allowed to finish normally, not force-powered off. Fresh deployments get
+  the corrected sizing directly and require no resize pass.
+- Primary LSO created three distinct 120 GiB block PVs; ODF created three OSDs,
+  three mons, CSI and NooBaa. NooBaa reached Ready; StorageCluster remains
+  Progressing and Ceph HEALTH_WARN. Storage role timed out during the resize
+  sequence; this is NOT a completed storage validation. Recovery storage has
+  not yet been installed because the role processes sites sequentially.
+- Remaining health findings: `MON_CLOCK_SKEW`, `AUTH_INSECURE_CLIENT_KEY_TYPE`,
+  `AUTH_INSECURE_KEYS_ALLOWED`, `AUTH_INSECURE_KEYS_CREATABLE`. Guest chrony
+  reports Stratum 0 / Not synchronised and unreachable public pool sources.
+  Fix reachable time service declaratively and investigate documented Ceph
+  key migration requirements; do not silence warnings or weaken health gates.
+
+## Intended configuration
 
 Each managed cluster has three schedulable control-plane nodes. Every node
 gets its own dedicated raw 120 GiB virtio disk as `/dev/vdb` at guest creation.

@@ -25,7 +25,9 @@ mac_base: "52:54:00:0d:0d"
 
 # --- compact-cluster node sizing ------------------------------------------
 # Masters carry the control plane + ODF + virtualization: generously sized.
-compact_master_vcpu: 10
+# Control plane + standard ODF (including RGW/NooBaa) + DR workloads.
+# 10 vCPUs left RGW/NooBaa Pending with Insufficient cpu during live validation.
+compact_master_vcpu: 20
 compact_master_ram: "40G"
 compact_master_disk: "120G"      # root disk (OS + image cache)
 compact_master_data_disk: "120G" # ODF disk -> /dev/vdb -> localblock PVs
