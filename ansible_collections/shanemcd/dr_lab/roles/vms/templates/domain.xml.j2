@@ -25,6 +25,14 @@
       <source file='{{ libvirt_runtime_dir }}/{{ node.name }}.qcow2'/>
       <target dev='vda' bus='virtio'/><boot order='1'/>
     </disk>
+{% if node.data_disk | default('', true) | length > 0 %}
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='{{ libvirt_runtime_dir }}/{{ node.name }}-data.raw'/>
+      <target dev='vdb' bus='virtio'/>
+      <serial>{{ node.name }}-odf</serial>
+    </disk>
+{% endif %}
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/><source file='{{ libvirt_runtime_dir }}/{{ vms_master_iso_name }}'/>
       <target dev='sda' bus='scsi'/><readonly/><boot order='2'/>

@@ -20,6 +20,20 @@
     mode: "0600"
     force: false
 
+- name: Create the dedicated ODF data disk once
+  ansible.builtin.command:
+    argv: [qemu-img, create, '-f', raw, "{{ libvirt_runtime_dir }}/{{ node.name }}-data.raw", "{{ node.data_disk }}"]
+    creates: "{{ libvirt_runtime_dir }}/{{ node.name }}-data.raw"
+  when: node.data_disk | default('', true) | length > 0
+
+- name: Assign data disk ownership to libvirt
+  ansible.builtin.file:
+    path: "{{ libvirt_runtime_dir }}/{{ node.name }}-data.raw"
+    owner: qemu
+    group: qemu
+    mode: '0600'
+  when: node.data_disk | default('', true) | length > 0
+
 - name: Stage the node's private ignition for libvirt
   ansible.builtin.copy:
     src: "{{ vm_ignition_dir }}/{{ node.name }}.ign"

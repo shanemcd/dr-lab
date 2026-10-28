@@ -1,0 +1,56 @@
+---
+- name: Merge installed node identity into the installer ignition
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ install_config_merge_script_path }}"
+      - node
+      - "{{ install_dir }}/{{ 'bootstrap.ign' if compact_node.name.endswith('-bootstrap') else 'master.ign' }}"
+      - "{{ vm_ignition_dir }}/{{ compact_node.name }}-installed.ign"
+      - "{{ compact_node.name }}"
+      - "{{ compact_node.ip }}"
+      - "{{ install_config_node_prefix_len }}"
+      - "{{ lab_gateway_ip }}"
+      - "{{ mac_base }}:{{ compact_node.mac_suffix }}"
+      - "{{ lab_gateway_ip }}"
+      - "{{ install_config_hosts_snippet_path }}"
+  register: compact_installed_merge
+  changed_when: "'MERGED' in compact_installed_merge.stdout"
+  no_log: true
+
+- name: Embed installed ignition in a live installation wrapper
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ install_config_merge_script_path }}"
+      - wrapper
+      - "{{ vm_ignition_dir }}/{{ compact_node.name }}-installed.ign"
+      - "{{ vm_ignition_dir }}/{{ compact_node.name }}-wrapper.ign"
+  register: compact_wrapper_merge
+  changed_when: "'MERGED' in compact_wrapper_merge.stdout"
+  no_log: true
+
+- name: Merge live node networking into the installation wrapper
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ install_config_merge_script_path }}"
+      - node
+      - "{{ vm_ignition_dir }}/{{ compact_node.name }}-wrapper.ign"
+      - "{{ vm_ignition_dir }}/{{ compact_node.name }}.ign"
+      - "{{ compact_node.name }}"
+      - "{{ compact_node.ip }}"
+      - "{{ install_config_node_prefix_len }}"
+      - "{{ lab_gateway_ip }}"
+      - "{{ mac_base }}:{{ compact_node.mac_suffix }}"
+      - "{{ lab_gateway_ip }}"
+      - "{{ install_config_hosts_snippet_path }}"
+  register: compact_live_merge
+  changed_when: "'MERGED' in compact_live_merge.stdout"
+  no_log: true
+
+- name: Restrict node ignition files
+  ansible.builtin.file:
+    path: "{{ vm_ignition_dir }}/{{ compact_node.name }}{{ item }}.ign"
+    mode: '0600'
+  loop: ['', '-installed', '-wrapper']

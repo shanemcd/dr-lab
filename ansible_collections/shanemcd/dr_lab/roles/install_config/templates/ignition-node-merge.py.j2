@@ -86,7 +86,7 @@ WantedBy=multi-user.target
 
 
 def node_mode(argv):
-    if len(argv) != 10:
+    if len(argv) != 11:
         sys.stderr.write(
             "usage: ignition-node-merge.py node <base.ign> <out.ign> "
             "<node_name> <node_ip> <prefix_len> <gateway> <node_mac> "

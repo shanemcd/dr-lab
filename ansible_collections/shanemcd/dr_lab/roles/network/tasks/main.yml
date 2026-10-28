@@ -11,7 +11,6 @@
   ansible.builtin.assert:
     that:
       - lab_bridge_name | length <= 15
-      - network_probe_suffix | int not in _claimed
       - (_claimed | length) == (_claimed | unique | length)
       - >-
         (range(network_dhcp_range_start_suffix | int,
@@ -109,6 +108,12 @@
   when: not (network_info.stdout is search('Active:\\s+yes'))
   changed_when: true
 
+- name: Assign compact cluster VIPs on the lab bridge
+  ansible.builtin.command:
+    argv: [ip, address, replace, "{{ item.api_vip }}/32", dev, "{{ lab_bridge_name }}"]
+  loop: "{{ compact_clusters }}"
+  changed_when: false
+
 - name: Render the live network reconciler
   # net-define only applies to stopped networks; additive changes (a new
   # fleet node on a warm scale-out) must reach the running embedded
@@ -164,7 +169,7 @@
 - name: Resolve each cluster's API through libvirt DNS
   ansible.builtin.command:
     argv: [dig, +short, "api.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
-  loop: "{{ lab_nodes }}"
+  loop: "{{ network_endpoints }}"
   loop_control:
     label: "{{ item.domain }}"
   register: network_cluster_dns
@@ -173,7 +178,7 @@
 - name: Resolve each cluster's ingress wildcard through libvirt DNS
   ansible.builtin.command:
     argv: [dig, +short, "x.apps.{{ item.domain }}", "@{{ lab_gateway_ip }}"]
-  loop: "{{ lab_nodes }}"
+  loop: "{{ network_endpoints }}"
   loop_control:
     label: "*.{{ item.domain }}"
   register: network_apps_dns

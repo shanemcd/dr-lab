@@ -86,5 +86,14 @@ network_sysctl_conf_name: "99-dr-lab.conf"
 network_dhcp_range_start_suffix: 200
 network_dhcp_range_end_suffix: 209
 network_bridge_addresses: >-
-  {{ ([lab_subnet_prefix ~ '.' ~ host_gateway_suffix ~ '/24']
-      + (compact_clusters | map(attribute='api_vip') | list)) }}
+  {{ [lab_gateway_ip ~ '/24'] + (compact_clusters | map(attribute='api_vip')
+      | map('regex_replace', '$', '/32') | list) }}
+
+network_endpoints: >-
+  {%- set out = [] -%}
+  {%- for c in clusters -%}
+  {%- set suffix = c.api_vip_suffix if c.install_flavor == 'compact' else c.ip_suffix -%}
+  {%- set _ = out.append({'domain': c.name ~ '.' ~ base_domain,
+                         'ip': lab_subnet_prefix ~ '.' ~ suffix}) -%}
+  {%- endfor -%}
+  {{ out }}

@@ -155,6 +155,13 @@
     mode: "0600"
     remote_src: true
 
+- name: Prepare per-node live and installed ignition
+  ansible.builtin.include_tasks: compact-node.yml
+  loop: "{{ (lab_nodes + bootstrap_nodes) | selectattr('cluster', 'equalto', cluster_name) | list }}"
+  loop_control:
+    loop_var: compact_node
+    label: "{{ compact_node.name }}"
+
 - name: Stat the installer kubeconfig
   ansible.builtin.stat:
     path: "{{ kubeconfig_path }}"
@@ -200,8 +207,8 @@
       - install_config_pull_secret_stat.stat.mode == '0600'
       - "'coreos-installer' in (install_config_wrapper_raw.content | b64decode)"
       - "'/opt/dr-lab/master.ign' in (install_config_wrapper_raw.content | b64decode)"
-  fail_msg: >-
-    Compact ignition generation verification failed for {{ cluster_name }}.
+    fail_msg: >-
+      Compact ignition generation verification failed for {{ cluster_name }}.
 
 - name: Write the ignition generation stamp
   ansible.builtin.copy:

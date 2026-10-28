@@ -1,0 +1,17 @@
+[Unit]
+Description=dr-lab API and ingress load balancer
+Requires=virtnetworkd.service
+After=virtnetworkd.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{% for c in compact_clusters %}
+ExecStartPre=/usr/sbin/ip address replace {{ c.api_vip }}/32 dev {{ lab_bridge_name }}
+{% endfor %}
+ExecStart=/usr/sbin/haproxy -db -f {{ loadbalancer_state_dir }}/haproxy.cfg
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,66 +1,44 @@
 ---
-# Per-cluster API/ingress VIPs for the compact clusters, served by haproxy
-# in a rootful podman container on the host network. Mode switching
-# (bootstrap -> masters) is driven by state markers created by
-# cluster_install; this role only renders + reloads.
-- name: Require podman
-  ansible.builtin.assert:
-    that:
-      - ansible_facts.packages['podman'] is defined
+- name: Install the distribution load balancer
+  ansible.builtin.package:
+    name: haproxy
+    state: present
 
-- name: Ensure the load balancer state + config directory exists
+- name: Create the private lab load balancer configuration directory
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ loadbalancer_state_dir }}"
     state: directory
     mode: '0755'
-  loop:
-    - "{{ loadbalancer_state_dir }}"
 
-- name: Stage the haproxy container build context
-  ansible.builtin.copy:
-    src: Containerfile
-    dest: "{{ loadbalancer_state_dir }}/Containerfile"
-    mode: '0644'
+- name: Inspect bootstrap completion markers
+  ansible.builtin.stat:
+    path: "{{ install_base_dir }}/{{ item.name }}/bootstrap-complete"
+  loop: "{{ compact_clusters }}"
+  register: lb_markers
 
-- name: Build the haproxy image
-  ansible.builtin.command:
-    argv: [podman, build, "-t", "{{ loadbalancer_image }}", "{{ loadbalancer_state_dir }}"]
-  register: lb_build
-  changed_when: false
-  failed_when: lb_build.rc != 0
+- name: Collect completed cluster names
+  ansible.builtin.set_fact:
+    lb_completed_clusters: >-
+      {{ lb_markers.results | selectattr('stat.exists') | map(attribute='item.name') | list }}
 
-- name: Render haproxy.cfg
+- name: Render and validate the load balancer configuration
   ansible.builtin.template:
     src: haproxy.cfg.j2
     dest: "{{ loadbalancer_state_dir }}/haproxy.cfg"
     mode: '0644'
+    validate: '/usr/sbin/haproxy -c -f %s'
   register: lb_cfg
 
-- name: Install the systemd unit
-  ansible.builtin.copy:
-    src: dr-lab-lb.service
+- name: Install the dedicated lab load balancer unit
+  ansible.builtin.template:
+    src: dr-lab-lb.service.j2
     dest: /etc/systemd/system/dr-lab-lb.service
     mode: '0644'
   register: lb_unit
 
-- name: Enable + (re)start the load balancer
+- name: Enable the lab load balancer
   ansible.builtin.systemd_service:
     name: dr-lab-lb.service
-    state: restarted
+    state: "{{ 'restarted' if lb_cfg.changed or lb_unit.changed else 'started' }}"
     enabled: true
     daemon_reload: "{{ lb_unit.changed }}"
-  when: lb_cfg.changed or lb_unit.changed
-
-- name: Ensure the load balancer is running
-  ansible.builtin.systemd_service:
-    name: dr-lab-lb.service
-    state: started
-    enabled: true
-    daemon_reload: "{{ lb_unit.changed }}"
-
-- name: Read back the rendered mode lines (sanity)
-  ansible.builtin.command:
-    argv: [grep, "-c", "^listen", "{{ loadbalancer_state_dir }}/haproxy.cfg"]
-  changed_when: false
-  register: lb_listeners
-  failed_when: lb_listeners.stdout | int != (compact_clusters | length) * 4

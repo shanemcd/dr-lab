@@ -29,7 +29,7 @@
     </dhcp>
   </ip>
   <dnsmasq:options>
-{% for node in lab_nodes %}
+{% for node in network_endpoints %}
     <dnsmasq:option value='address=/.apps.{{ node.domain }}/{{ node.ip }}'/>
 {% endfor %}
   </dnsmasq:options>

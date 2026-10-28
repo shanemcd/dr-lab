@@ -1,145 +1,107 @@
 ---
-# vms: the three SNO guests as persistent libvirt domains. Each node is a
-# BiP boot model: live ISO (kernel args patched for platform=qemu +
-# serial console) + blank virtio install target + merged BiP ignition
-# delivered via fw_cfg sysinfo. The distro aarch64 QEMU (Fedora
-# qemu-system-aarch64 + edk2-aarch64 firmware) runs the guests — no
-# custom emulator build. Domains autostart with the lab network; boot
-# order is install-target first, ISO second, so the installed disk wins
-# after install-to-disk reboots. All domain-opened files (disk, ISO,
-# ignition) are staged into libvirt's private runtime dir because the
-# workspace lives under a 0700 home the qemu user cannot traverse.
+# Persistent masters and temporary bootstrap guests use the same supported
+# live-ISO -> coreos-installer -> disk boot path. Never recreate bootstrap
+# guests after the installer has reported bootstrap-complete.
+- name: Inspect bootstrap completion markers
+  ansible.builtin.stat:
+    path: "{{ install_base_dir }}/{{ item.cluster }}/bootstrap-complete"
+  loop: "{{ bootstrap_nodes }}"
+  register: vms_bootstrap_markers
 
-- name: Stat per-node ignition configs
+- name: Select guests needed by this install
+  ansible.builtin.set_fact:
+    vms_nodes: >-
+      {{ lab_nodes + (vms_bootstrap_markers.results | rejectattr('stat.exists')
+                      | map(attribute='item') | list) }}
+
+- name: Check the prepared node ignition files
   ansible.builtin.stat:
     path: "{{ vm_ignition_dir }}/{{ item.name }}.ign"
-  loop: "{{ lab_nodes }}"
-  loop_control:
-    label: "{{ item.name }}"
+  loop: "{{ vms_nodes }}"
   register: vms_ignition_stat
 
-- name: Assert per-node ignition configs exist
+- name: Require ignition for every selected guest
   ansible.builtin.assert:
-    that:
-      - item.stat.exists
-    fail_msg: >-
-      Ignition {{ item.item.name }}.ign missing under {{ vm_ignition_dir }}
-      — run 04_ignition.yml first.
+    that: item.stat.exists
+    fail_msg: "Missing ignition for {{ item.item.name }}; run 04_ignition first."
   loop: "{{ vms_ignition_stat.results }}"
   loop_control:
     label: "{{ item.item.name }}"
-
-- name: Stat the downloaded RHCOS live ISO
-  ansible.builtin.stat:
-    path: "{{ rhcos_live_iso_path }}"
-  register: vms_iso_stat
-
-- name: Assert the RHCOS live ISO was downloaded
-  ansible.builtin.assert:
-    that:
-      - vms_iso_stat.stat.exists
-    fail_msg: >-
-      RHCOS live ISO missing at {{ rhcos_live_iso_path }}
-      — run 02_artifacts.yml first.
 
 - name: Ensure VM asset directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    mode: "0755"
+    mode: '0755'
   loop:
     - "{{ vm_images_dir }}"
     - "{{ vm_logs_dir }}"
     - "{{ vm_scripts_dir }}"
     - "{{ vm_run_dir }}"
 
-- name: Create the per-node install target disks
-  # BiP: a BLANK disk — coreos-installer writes the installed master to it
-  # (installationDisk /dev/vda) once the live-env bootstrap completes. The
-  # creates-guard keeps an installed target across re-runs.
+- name: Create root install targets once
   ansible.builtin.command:
-    argv:
-      - qemu-img
-      - create
-      - "-f"
-      - qcow2
-      - "{{ vm_images_dir }}/{{ item.name }}.qcow2"
-      - "{{ item.disk }}"
+    argv: [qemu-img, create, '-f', qcow2, "{{ vm_images_dir }}/{{ item.name }}.qcow2", "{{ item.disk }}"]
     creates: "{{ vm_images_dir }}/{{ item.name }}.qcow2"
-  loop: "{{ lab_nodes }}"
+  loop: "{{ vms_nodes }}"
   loop_control:
     label: "{{ item.name }}"
 
-- name: Copy the live ISO as the nodes' boot medium
-  # force=false: never overwrite a prepared copy (the kargs modification
-  # below would be reverted); the stream original stays untouched.
+- name: Copy the unmodified live ISO once
   ansible.builtin.copy:
     src: "{{ rhcos_live_iso_path }}"
     dest: "{{ vm_images_dir }}/{{ vms_master_iso_name }}"
-    owner: "{{ lab_workspace_identity.uid }}"
-    group: "{{ lab_workspace_identity.gid }}"
-    mode: "0644"
+    remote_src: true
+    mode: '0644'
     force: false
 
-- name: Read the boot-medium kernel args
+- name: Read current ISO kernel arguments
   ansible.builtin.command:
-    argv:
-      - coreos-installer
-      - iso
-      - kargs
-      - show
-      - "{{ vm_images_dir }}/{{ vms_master_iso_name }}"
+    argv: [coreos-installer, iso, kargs, show, "{{ vm_images_dir }}/{{ vms_master_iso_name }}"]
   register: vms_kargs_show
   changed_when: false
 
-- name: Prepare the boot-medium kernel args
-  # platform=qemu makes ignition read the fw_cfg config; the serial console
-  # makes the guest's boot observable in the serial log. Only appended
-  # when absent — coreos-installer does not deduplicate.
+- name: Set missing boot arguments
   ansible.builtin.command:
     argv:
       - coreos-installer
       - iso
       - kargs
       - modify
-      - "--append"
-      - "{{ vms_iso_kargs | join(' ') }}"
+      - --append
+      - "{{ vms_iso_kargs | reject('in', vms_kargs_show.stdout) | join(' ') }}"
       - "{{ vm_images_dir }}/{{ vms_master_iso_name }}"
   when: vms_iso_kargs | reject('in', vms_kargs_show.stdout) | list | length > 0
-  register: vms_kargs_modify
   changed_when: true
 
-- name: Stage and define each persistent SNO domain
+- name: Stage and define the selected guests
   ansible.builtin.include_tasks: libvirt-node.yml
-  loop: "{{ lab_nodes }}"
+  loop: "{{ vms_nodes }}"
   loop_control:
     loop_var: node
+    label: "{{ node.name }}"
 
-- name: Check whether each domain is active
+- name: Inspect guest state
   ansible.builtin.command:
-    argv: [virsh, -c, "{{ libvirt_uri }}", dominfo, "{{ item.name }}"]
-  loop: "{{ lab_nodes }}"
-  loop_control:
-    label: "{{ item.name }}"
+    argv: [virsh, '-c', "{{ libvirt_uri }}", dominfo, "{{ item.name }}"]
+  loop: "{{ vms_nodes }}"
   register: vms_dominfo
   changed_when: false
   environment: {LC_ALL: C}
 
-- name: Start each inactive SNO domain
+- name: Start inactive guests
   ansible.builtin.command:
-    argv: [virsh, -c, "{{ libvirt_uri }}", start, "{{ item.item.name }}"]
+    argv: [virsh, '-c', "{{ libvirt_uri }}", start, "{{ item.item.name }}"]
   loop: "{{ vms_dominfo.results }}"
   loop_control:
     label: "{{ item.item.name }}"
   when: not (item.stdout is search('State:\s+running'))
   changed_when: true
 
-- name: Wait for kernel boot evidence in each serial log
-  # The serial log is the only boot console (video none). This proves the
-  # guest kernel came up; the cluster_install stage owns everything after.
+- name: Wait for guest kernel evidence
   ansible.builtin.command:
-    argv: [grep, "-q", "{{ vms_boot_marker }}", "/var/log/libvirt/qemu/{{ item.name }}.serial.log"]
-  loop: "{{ lab_nodes }}"
+    argv: [grep, '-q', "{{ vms_boot_marker }}", "/var/log/libvirt/qemu/{{ item.name }}.serial.log"]
+  loop: "{{ vms_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: vms_boot_check
@@ -147,16 +109,3 @@
   retries: "{{ vms_boot_marker_retries }}"
   delay: "{{ vms_boot_marker_delay }}"
   changed_when: false
-  failed_when: false
-
-- name: Assert every SNO shows kernel boot evidence
-  ansible.builtin.assert:
-    that:
-      - item.rc == 0
-    fail_msg: >-
-      {{ item.item.name }} has no '{{ vms_boot_marker }}' in its serial log
-      after {{ vms_boot_marker_retries }} tries — inspect
-      /var/log/libvirt/qemu/{{ item.item.name }}.serial.log.
-  loop: "{{ vms_boot_check.results }}"
-  loop_control:
-    label: "{{ item.item.name }}"
