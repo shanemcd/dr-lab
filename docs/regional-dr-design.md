@@ -31,7 +31,8 @@ https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for
 ## Remaining implementation gates
 
 - Discover exact 4.22 operator package/channel/CSV compatibility from the rebuilt clusters.
-- Automate cluster-set broker and SubmarinerConfig (one gateway per site, NAT disabled on shared underlay); validate gateway/route agents and cross-overlay reachability.
+- Managed Submariner automation is implemented in stage10: cluster-set broker without Globalnet, explicit first-master gateway, SubmarinerConfig and ManagedClusterAddOn per site, then gateway/agent/connection conditions. Runtime CRD/behavior and an end-to-end cross-overlay probe remain unverified. The default NAT/cable-driver behavior is retained rather than guessing unverified CRD fields.
+- API procedure source: https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.17/pdf/networking/uninstalling-submariner-manually (Networking section1.4.21). Deprecated installNamespace is deliberately omitted. Default gateway selection is overridden by labeling the designated compact master before enabling the add-on.
 - Install GitOps and orchestrator; implement documented peering, trust and policy configuration against live CRDs rather than guessing fields.
 - Verify mirroring/S3 metadata/OADP, then protect a minimal ARM64 VM.
 - Only after cluster/storage/DR layers run, investigate software-emulated virtualization on Neoverse-N1 (no nested KVM). Never report a successful failover without observing a target-side running VMI and protected state.

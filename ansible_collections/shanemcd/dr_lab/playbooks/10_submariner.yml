@@ -1,0 +1,13 @@
+---
+- name: Cross-site overlay transport for Regional-DR
+  hosts: all
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Connect the DR sites with managed Submariner
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.submariner

@@ -1,0 +1,94 @@
+---
+# RHACM 2.17 Networking, Deploying Submariner with ManagedClusterAddOn API.
+- name: Validate the DR transport topology
+  ansible.builtin.assert:
+    that:
+      - acm_spokes | length == 2
+      - acm_spokes | difference(compact_clusters | map(attribute='name') | list) | length == 0
+      - submariner_clusterset | length <= 56
+
+- name: Set transport hub credentials
+  ansible.builtin.set_fact:
+    submariner_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+
+- name: Create the transport cluster set
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: cluster.open-cluster-management.io/v1beta2
+      kind: ManagedClusterSet
+      metadata:
+        name: {{ submariner_clusterset }}
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_set
+  changed_when: "'created' in submariner_set.stdout or 'configured' in submariner_set.stdout"
+
+- name: Wait for the managed broker namespace
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", get, namespace, "{{ submariner_clusterset }}-broker"]
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_broker_ns
+  until: submariner_broker_ns.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Configure the broker without Globalnet (inventory CIDRs do not overlap)
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: submariner.io/v1alpha1
+      kind: Broker
+      metadata:
+        name: submariner-broker
+        namespace: {{ submariner_clusterset }}-broker
+        labels:
+          cluster.open-cluster-management.io/backup: submariner
+      spec:
+        globalnetEnabled: false
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_broker
+  changed_when: "'created' in submariner_broker.stdout or 'configured' in submariner_broker.stdout"
+
+# All sites must be enabled before waiting for cross-site connections.
+- name: Enable the transport on every spoke
+  ansible.builtin.include_tasks: spoke.yml
+  loop: "{{ acm_spokes }}"
+  loop_control:
+    loop_var: submariner_spoke
+
+- name: Verify that both transport add-ons report healthy connections
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - managedclusteraddon
+      - submariner
+      - -n
+      - "{{ item }}"
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_health
+  until:
+    - submariner_health.rc == 0
+    - >-
+      (submariner_health.stdout | from_json).status.conditions | default([])
+      | selectattr('type', 'equalto', 'SubmarinerGatewayNodesLabeled')
+      | selectattr('status', 'equalto', 'True') | list | length == 1
+    - >-
+      (submariner_health.stdout | from_json).status.conditions | default([])
+      | selectattr('type', 'equalto', 'SubmarinerAgentDegraded')
+      | selectattr('status', 'equalto', 'False') | list | length == 1
+    - >-
+      (submariner_health.stdout | from_json).status.conditions | default([])
+      | selectattr('type', 'equalto', 'SubmarinerConnectionDegraded')
+      | selectattr('status', 'equalto', 'False') | list | length == 1
+  retries: "{{ submariner_health_retries }}"
+  delay: 10
+  changed_when: false
+  loop: "{{ acm_spokes }}"

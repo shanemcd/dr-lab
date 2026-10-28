@@ -1,0 +1,4 @@
+---
+# The two spoke pod/service CIDRs are distinct: do not enable Globalnet.
+submariner_clusterset: dr-sites
+submariner_health_retries: 120

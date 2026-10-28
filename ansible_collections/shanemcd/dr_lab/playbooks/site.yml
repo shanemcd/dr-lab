@@ -10,5 +10,7 @@
   import_playbook: 08_acm.yml
 - name: Storage stage
   import_playbook: 09_storage.yml
+- name: Cross-site overlay transport stage
+  import_playbook: 10_submariner.yml
 - name: Verification stage
   import_playbook: verify.yml

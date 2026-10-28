@@ -1,0 +1,55 @@
+---
+- name: Select a stable gateway on the compact site
+  ansible.builtin.set_fact:
+    submariner_gateway: >-
+      {{ (lab_nodes | selectattr('cluster', 'equalto', submariner_spoke) | list | first).name }}
+
+- name: Label the selected master as a Submariner gateway
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - label
+      - node
+      - "{{ submariner_gateway }}"
+      - submariner.io/gateway=true
+      - --overwrite
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ submariner_spoke }}/auth/kubeconfig"
+  register: submariner_gateway_label
+  changed_when: "'not labeled' not in submariner_gateway_label.stdout"
+
+- name: Join the DR transport cluster set
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - label
+      - managedcluster
+      - "{{ submariner_spoke }}"
+      - "cluster.open-cluster-management.io/clusterset={{ submariner_clusterset }}"
+      - --overwrite
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_join
+  changed_when: "'not labeled' not in submariner_join.stdout"
+
+- name: Configure and enable the spoke Submariner add-on
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: submarineraddon.open-cluster-management.io/v1alpha1
+      kind: SubmarinerConfig
+      metadata:
+        name: submariner
+        namespace: {{ submariner_spoke }}
+      spec: {}
+      ---
+      apiVersion: addon.open-cluster-management.io/v1alpha1
+      kind: ManagedClusterAddOn
+      metadata:
+        name: submariner
+        namespace: {{ submariner_spoke }}
+      spec: {}
+  environment:
+    KUBECONFIG: "{{ submariner_hub_kubeconfig }}"
+  register: submariner_addon
+  changed_when: "'created' in submariner_addon.stdout or 'configured' in submariner_addon.stdout"
