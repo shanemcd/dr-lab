@@ -1,0 +1,86 @@
+---
+- name: Resolve the operator target credentials
+  ansible.builtin.set_fact:
+    dr_target_kubeconfig: "{{ install_base_dir }}/{{ dr_target_cluster }}/auth/kubeconfig"
+
+- name: Read the package channels from the live Red Hat catalog
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - packagemanifest
+      - "{{ dr_operator_package }}"
+      - -n
+      - openshift-marketplace
+      - -o
+      - json
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_package_manifest
+  until: dr_package_manifest.rc == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Require the configured channel in the Red Hat catalog
+  ansible.builtin.assert:
+    that:
+      - (dr_package_manifest.stdout | from_json).status.catalogSource == 'redhat-operators'
+      - dr_operator_channel in (dr_package_manifest.stdout | from_json).status.channels | map(attribute='name') | list
+    fail_msg: >-
+      {{ dr_operator_package }} channel {{ dr_operator_channel }} is not available
+      from redhat-operators on {{ dr_target_cluster }}. Review the catalog rather than
+      silently installing a different release.
+
+- name: Subscribe in the shared all-namespaces operator namespace
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+    stdin: |
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: {{ dr_operator_package }}
+        namespace: openshift-operators
+      spec:
+        channel: {{ dr_operator_channel }}
+        installPlanApproval: Automatic
+        name: {{ dr_operator_package }}
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_operator_subscription
+  changed_when: "'created' in dr_operator_subscription.stdout or 'configured' in dr_operator_subscription.stdout"
+
+- name: Wait for this subscription to resolve its own installed CSV
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - subscription
+      - "{{ dr_operator_package }}"
+      - -n
+      - openshift-operators
+      - -o
+      - 'jsonpath={.status.installedCSV}'
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  register: dr_operator_csv
+  until: dr_operator_csv.rc == 0 and dr_operator_csv.stdout | length > 0
+  retries: "{{ ((dr_operator_timeout_seconds | int) / 10) | int }}"
+  delay: 10
+  changed_when: false
+
+- name: Wait for the resolved operator CSV to succeed
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - "--for=jsonpath={.status.phase}=Succeeded"
+      - "csv/{{ dr_operator_csv.stdout }}"
+      - -n
+      - openshift-operators
+      - "--timeout={{ dr_operator_timeout_seconds }}s"
+  environment:
+    KUBECONFIG: "{{ dr_target_kubeconfig }}"
+  changed_when: false

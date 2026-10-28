@@ -1,0 +1,7 @@
+---
+# ODF 4.22 Regional-DR prerequisites. Channels are validated against the live catalog.
+dr_gitops_package: openshift-gitops-operator
+dr_gitops_channel: latest
+dr_orchestrator_package: odf-multicluster-orchestrator
+dr_orchestrator_channel: stable-4.22
+dr_operator_timeout_seconds: 1200

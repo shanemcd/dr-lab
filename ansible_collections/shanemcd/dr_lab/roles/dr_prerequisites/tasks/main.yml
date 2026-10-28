@@ -1,0 +1,55 @@
+---
+- name: Install GitOps on the hub and both DR sites before the orchestrator
+  ansible.builtin.include_tasks: operator.yml
+  loop: "{{ [acm_cluster] + acm_spokes }}"
+  loop_control:
+    loop_var: dr_target_cluster
+  vars:
+    dr_operator_package: "{{ dr_gitops_package }}"
+    dr_operator_channel: "{{ dr_gitops_channel }}"
+
+- name: Install ODF Multicluster Orchestrator and its DR hub operator dependency
+  ansible.builtin.include_tasks: operator.yml
+  vars:
+    dr_target_cluster: "{{ acm_cluster }}"
+    dr_operator_package: "{{ dr_orchestrator_package }}"
+    dr_operator_channel: "{{ dr_orchestrator_channel }}"
+
+- name: Require Regional-DR hub APIs from the orchestrator dependencies
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - wait
+      - --for=condition=Established
+      - "crd/{{ item }}"
+      - --timeout=10s
+  loop:
+    - drpolicies.ramendr.openshift.io
+    - drclusters.ramendr.openshift.io
+    - drplacementcontrols.ramendr.openshift.io
+    - mirrorpeers.multicluster.odf.openshift.io
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: dr_hub_api
+  until: dr_hub_api.rc == 0
+  retries: "{{ ((dr_operator_timeout_seconds | int) / 20) | int }}"
+  delay: 10
+  changed_when: false
+
+- name: Require the documented DR hub operator to be running
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - rollout
+      - status
+      - deployment/ramen-hub-operator
+      - -n
+      - openshift-operators
+      - --timeout=10s
+  environment:
+    KUBECONFIG: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  register: dr_hub_operator_ready
+  until: dr_hub_operator_ready.rc == 0
+  retries: "{{ ((dr_operator_timeout_seconds | int) / 20) | int }}"
+  delay: 10
+  changed_when: false

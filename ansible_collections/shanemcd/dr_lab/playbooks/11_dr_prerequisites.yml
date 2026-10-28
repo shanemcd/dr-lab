@@ -1,0 +1,13 @@
+---
+- name: Regional-DR operator prerequisites
+  hosts: all
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Resolve the workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Install GitOps and the ODF Multicluster Orchestrator
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.dr_prerequisites
