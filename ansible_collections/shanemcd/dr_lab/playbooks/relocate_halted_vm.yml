@@ -1,0 +1,273 @@
+---
+# Diagnostic only. Planned relocation is NOT running-VM or disaster failover proof.
+- name: Relocate the isolated halted marker VM without executing a guest
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    halted_namespace: dr-halted-probe
+    halted_name: halted-marker
+    halted_source: "{{ acm_spokes[0] }}"
+    halted_target: "{{ acm_spokes[1] }}"
+    halted_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
+  roles:
+    - role: shanemcd.dr_lab.workspace
+  tasks:
+    - name: Require both managed sites to be available
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, managedcluster, "{{ item }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      loop: "{{ acm_spokes }}"
+      register: halted_sites
+      changed_when: false
+      failed_when: >-
+        halted_sites.rc != 0 or
+        ((halted_sites.stdout | from_json).status.conditions
+        | selectattr('type', 'equalto', 'ManagedClusterConditionAvailable')
+        | selectattr('status', 'equalto', 'True') | list | length != 1)
+
+    - name: Refuse any running VM instance on either site in the diagnostic namespace
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, vmi, -n, "{{ halted_namespace }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ item }}/auth/kubeconfig"
+      loop: "{{ acm_spokes }}"
+      register: halted_instances
+      changed_when: false
+      failed_when: halted_instances.rc != 0 or (halted_instances.stdout | from_json)['items'] | length != 0
+
+    - name: Read diagnostic control before a guarded planned relocation
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, drpc, "{{ halted_name }}", -n, openshift-dr-ops, -o, json]
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_control
+      changed_when: false
+
+    - name: Require the exact diagnostic application identity and protected source or existing relocation
+      ansible.builtin.assert:
+        that:
+          - (halted_control.stdout | from_json).spec.protectedNamespaces == [halted_namespace]
+          - >-
+            (halted_control.stdout | from_json).spec.pvcSelector.matchLabels ==
+            {'ramendr.openshift.io/k8s-resource-selector': halted_name}
+          - (halted_control.stdout | from_json).spec.drPolicyRef.name == regional_dr_policy_name
+          - >-
+            (((halted_control.stdout | from_json).spec.action | default('') == '') and
+            (halted_control.stdout | from_json).spec.preferredCluster == halted_source and
+            ((halted_control.stdout | from_json).status.conditions
+            | selectattr('observedGeneration', 'equalto', (halted_control.stdout | from_json).metadata.generation)
+            | selectattr('type', 'equalto', 'Protected')
+            | selectattr('status', 'equalto', 'True') | list | length == 1)) or
+            ((halted_control.stdout | from_json).spec.action | default('') == 'Relocate' and
+            (halted_control.stdout | from_json).spec.preferredCluster == halted_target)
+
+    - name: Request planned relocation with optimistic concurrency protection
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - patch
+          - drpc
+          - "{{ halted_name }}"
+          - -n
+          - openshift-dr-ops
+          - --type=json
+          - -p
+          - >-
+            {{ [{'op': 'test', 'path': '/metadata/resourceVersion',
+                 'value': (halted_control.stdout | from_json).metadata.resourceVersion},
+                {'op': 'add', 'path': '/spec/action', 'value': 'Relocate'},
+                {'op': 'replace', 'path': '/spec/preferredCluster', 'value': halted_target}] | to_json }}
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      when: (halted_control.stdout | from_json).spec.action | default('') != 'Relocate'
+      changed_when: true
+
+    # ODF 4.22 section 4.11: non-VM-owned resources require explicit cleanup.
+    # Our standalone seeded PVC is intentionally not a VM-owned DataVolume.
+    - name: Wait until Ramen requests source demotion after final sync
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, vrg, "{{ halted_name }}", -n, openshift-dr-ops, -o, json]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_source }}/auth/kubeconfig"
+      register: halted_demoting
+      until: >-
+        halted_demoting.rc == 0 and
+        (halted_demoting.stdout | from_json).spec.replicationState == 'secondary' and
+        (halted_demoting.stdout | from_json).spec.action == 'Relocate'
+      retries: 120
+      delay: 10
+      changed_when: false
+
+    - name: Inspect the exact standalone source objects before documented cleanup
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - get
+          - vm,pvc
+          - "{{ halted_name }}"
+          - -n
+          - "{{ halted_namespace }}"
+          - --ignore-not-found
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_source }}/auth/kubeconfig"
+      register: halted_source_objects
+      changed_when: false
+
+    - name: Guard cleanup by diagnostic labels and halted VM state
+      ansible.builtin.assert:
+        that:
+          - item.metadata.labels['ramendr.openshift.io/k8s-resource-selector'] == halted_name
+          - item.kind != 'VirtualMachine' or item.spec.runStrategy == 'Halted'
+      loop: "{{ (halted_source_objects.stdout | from_json)['items'] }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.metadata.name }}"
+
+    - name: Remove only the diagnostic source objects after controller requested demotion
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - vm,pvc
+          - "{{ halted_name }}"
+          - -n
+          - "{{ halted_namespace }}"
+          - --ignore-not-found
+          - --wait=true
+          - --timeout=180s
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_source }}/auth/kubeconfig"
+      register: halted_source_cleanup
+      changed_when: "'deleted' in halted_source_cleanup.stdout"
+
+    - name: Wait for the controller to finish planned relocation
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - --request-timeout=20s
+          - get
+          - drpc
+          - "{{ halted_name }}"
+          - -n
+          - openshift-dr-ops
+          - -o
+          - json
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_relocated
+      until: >-
+        halted_relocated.rc == 0 and
+        ((halted_relocated.stdout | from_json).status.phase | default('') == 'Relocated') and
+        ((halted_relocated.stdout | from_json).status.progression | default('') == 'Completed') and
+        ((halted_relocated.stdout | from_json).status.conditions
+        | selectattr('observedGeneration', 'equalto', (halted_relocated.stdout | from_json).metadata.generation)
+        | selectattr('type', 'equalto', 'Available') | selectattr('status', 'equalto', 'True') | list | length == 1)
+      retries: 180
+      delay: 10
+      changed_when: false
+
+    - name: Require mutually exclusive replication roles after planned relocation
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, vrg, "{{ halted_name }}", -n, openshift-dr-ops, -o, json]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ item.cluster }}/auth/kubeconfig"
+      loop:
+        - {cluster: "{{ halted_source }}", state: Secondary, desired: secondary}
+        - {cluster: "{{ halted_target }}", state: Primary, desired: primary}
+      register: halted_roles
+      changed_when: false
+      failed_when: >-
+        halted_roles.rc != 0 or
+        (halted_roles.stdout | from_json).spec.replicationState != item.desired or
+        (halted_roles.stdout | from_json).status.state != item.state or
+        (halted_roles.stdout | from_json).status.observedGeneration !=
+        (halted_roles.stdout | from_json).metadata.generation
+
+    - name: Require the restored VM to remain halted
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, vm, "{{ halted_name }}", -n, "{{ halted_namespace }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_target }}/auth/kubeconfig"
+      register: halted_restored
+      changed_when: false
+      failed_when: halted_restored.rc != 0 or (halted_restored.stdout | from_json).spec.runStrategy != 'Halted'
+
+    - name: Verify recovered disk without writing or executing the VM
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
+        stdin: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: marker-reader
+            namespace: {{ halted_namespace }}
+          spec:
+            restartPolicy: Never
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              seccompProfile: {type: RuntimeDefault}
+            containers:
+              - name: reader
+                image: {{ submariner_probe_image }}
+                command: [python3, '-c']
+                args:
+                  - |
+                    import os
+                    with open('/disk/disk.img', 'rb') as f:
+                        assert os.fstat(f.fileno()).st_size == 64 * 1024 * 1024
+                        f.seek(1024 * 1024)
+                        marker = b'dr-lab-halted-marker-v1\n'
+                        assert f.read(len(marker)) == marker, 'recovered marker mismatch'
+                    print('RECOVERED_HALTED_MARKER_VERIFIED')
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities: {drop: [ALL]}
+                resources:
+                  requests: {cpu: 20m, memory: 64Mi}
+                  limits: {memory: 128Mi}
+                volumeMounts:
+                  - {name: disk, mountPath: /disk, readOnly: true}
+            volumes:
+              - name: disk
+                persistentVolumeClaim:
+                  claimName: {{ halted_name }}
+                  readOnly: true
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_target }}/auth/kubeconfig"
+      register: halted_reader_apply
+      changed_when: "'created' in halted_reader_apply.stdout or 'configured' in halted_reader_apply.stdout"
+
+    - name: Require recovered marker verification to succeed
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, pod, marker-reader, -n, "{{ halted_namespace }}", -o, json]
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_target }}/auth/kubeconfig"
+      register: halted_reader
+      until: >-
+        halted_reader.rc == 0 and
+        (halted_reader.stdout | from_json).status.phase in ['Succeeded', 'Failed']
+      failed_when: >-
+        halted_reader.rc != 0 or
+        (halted_reader.stdout | from_json).status.phase == 'Failed'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Unmount the read-only recovery probe
+      ansible.builtin.command:
+        argv:
+          - "{{ install_bin_dir }}/oc"
+          - delete
+          - pod
+          - marker-reader
+          - -n
+          - "{{ halted_namespace }}"
+          - --wait=true
+          - --timeout=120s
+      environment:
+        KUBECONFIG: "{{ install_base_dir }}/{{ halted_target }}/auth/kubeconfig"
+      changed_when: true

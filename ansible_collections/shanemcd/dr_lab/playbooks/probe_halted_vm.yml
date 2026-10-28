@@ -40,6 +40,22 @@
             ((halted_previous.stdout | from_json).spec.preferredCluster == halted_primary))
         fail_msg: Inspect existing diagnostic DR state; never reseed after failover or relocation.
 
+    - name: Read the Ramen namespace security retention configuration
+      ansible.builtin.command:
+        argv: ["{{ install_bin_dir }}/oc", get, cm, ramen-hub-operator-config, -n, openshift-operators, -o, json]
+      environment:
+        KUBECONFIG: "{{ halted_hub_kubeconfig }}"
+      register: halted_security_config
+      changed_when: false
+
+    - name: Require supported namespace SCC retention for cross-site filesystem access
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((halted_security_config.stdout | from_json).data['ramen_manager_config.yaml']
+            | from_yaml).retainNamespaceSCCAcrossPeers | default(false) | bool
+        fail_msg: Both RamenConfig and DRPC must retain namespace SCC annotations before protection starts.
+
     - name: Create an isolated marker disk and halted VM
       ansible.builtin.command:
         argv: ["{{ install_bin_dir }}/oc", apply, -f, '-']
@@ -196,6 +212,7 @@
             namespace: openshift-dr-ops
           spec:
             preferredCluster: {{ halted_primary }}
+            retainNamespaceSCCAcrossPeers: true
             protectedNamespaces: [{{ halted_namespace }}]
             placementRef:
               apiVersion: cluster.open-cluster-management.io/v1beta1

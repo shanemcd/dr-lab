@@ -34,11 +34,34 @@ class HaltedProbeTests(unittest.TestCase):
         manifest = placement['ansible.builtin.command']['stdin']
         self.assertIn('experimental-scheduling-disable', manifest)
         self.assertIn('name: vm-recipe', manifest)
+        self.assertIn('retainNamespaceSCCAcrossPeers: true', manifest)
+        retention = next(t for t in tasks if t['name'].startswith('Require supported namespace SCC'))
+        self.assertIn('retainNamespaceSCCAcrossPeers', str(retention))
         wait = next(t for t in tasks if t.get('register') == 'halted_drpc')
         self.assertIn("'Protected'", wait['until'])
         self.assertIn('metadata.generation', wait['until'])
         self.assertNotIn("'PeerReady'", wait['until'])
         self.assertNotIn('probe_halted_vm', (PLAYBOOKS / 'site.yml').read_text())
+
+    def test_relocation_is_guarded_planned_diagnostic_and_read_only(self):
+        text = (PLAYBOOKS / 'relocate_halted_vm.yml').read_text()
+        tasks = yaml.safe_load(text)[0]['tasks']
+        patch = next(t for t in tasks if t['name'].startswith('Request planned relocation'))
+        self.assertIn('/metadata/resourceVersion', str(patch))
+        self.assertIn("'value': 'Relocate'", str(patch))
+        self.assertNotIn("'value': 'Failover'", str(patch))
+        guard = next(t for t in tasks if t.get('register') == 'halted_instances')
+        self.assertIn("['items']", guard['failed_when'])
+        demotion = next(t for t in tasks if t.get('register') == 'halted_demoting')
+        self.assertIn("replicationState == 'secondary'", demotion['until'])
+        cleanup = next(t for t in tasks if t.get('register') == 'halted_source_cleanup')
+        self.assertIn('vm,pvc', cleanup['ansible.builtin.command']['argv'])
+        self.assertNotIn('--all', str(cleanup))
+        self.assertLess(tasks.index(demotion), tasks.index(cleanup))
+        reader = next(t for t in tasks if t.get('register') == 'halted_reader_apply')
+        self.assertIn('readOnly: true', reader['ansible.builtin.command']['stdin'])
+        self.assertIn("open('/disk/disk.img', 'rb')", reader['ansible.builtin.command']['stdin'])
+        self.assertNotIn('relocate_halted_vm', (PLAYBOOKS / 'site.yml').read_text())
 
 
 if __name__ == '__main__':

@@ -64,3 +64,46 @@ These facts prove a replication checkpoint and successful object capture, **not*
 that recovery can restore and read the marker, not that a VM has executed, and
 not that unplanned failover is fenced or split-brain-safe. Those remain separate
 acceptance work, as does the full teardown and one-shot redeployment.
+
+## Planned relocation diagnostic (iteration 25)
+
+`playbooks/relocate_halted_vm.yml` is also separate from `site.yml`. It requires
+both managed sites Available, no VMI in the diagnostic namespace on either site,
+the exact diagnostic identity and current-generation protection. It requests
+`action: Relocate` and changes `preferredCluster` using a resourceVersion-tested
+JSON patch. It never requests unplanned failover or edits fencing/status.
+
+ODF 4.22 section 4.11 limits automatic garbage collection to VM-owned resources.
+The marker PVC is standalone, so after Ramen requests source demotion following
+final sync, the diagnostic explicitly deletes only its labelled Halted VM and
+PVC. It does not strip finalizers. Completion additionally requires current
+source Secondary / target Primary, restored VM Halted, and a restricted read-only
+reader verifying the marker. These checks do not prove running-VM failover.
+
+The first live exercise found two additional gaps rather than passing:
+
+- Ramen reached **Relocated / Completed**, source VRG Secondary and recovery VRG
+  Primary, and restored a Halted VM plus Bound PVC. Source PVC deletion stayed
+  Terminating with Ramen and VGR protection finalizers. The strict source cleanup
+  gate timed out (`/tmp/dr-halted-relocation-cleanup.log`). `Protected=False`
+  reports `No PVC on the secondary should match the label selector`. No finalizer
+  was removed and no replication state was patched to hide this.
+- A separately resumed recovery read (not a full-playbook pass) failed with
+  `PermissionError: [Errno 13] Permission denied: '/disk/disk.img'`.
+  Source namespace SCC groups/UID range were `1000900000/10000`, recovery
+  `1000910000/10000`; SELinux MCS also differed. No root reader, custom SCC,
+  permission rewrite, or SELinux bypass was used. The failed reader was removed.
+
+The deployed DRPC API documents `retainNamespaceSCCAcrossPeers`: both DRPC and
+RamenConfig must enable it **before** creating the secondary namespace. The hub
+configuration already has it true; the initial diagnostic omitted the DRPC flag.
+The protection playbook now explicitly enables it and verifies the hub flag.
+An isolated second diagnostic uses distinct names/selectors (`dr-halted-probe-v2`,
+`halted-marker-v2`); it cannot select the original PVC. The original failed
+exercise is retained as evidence, not retroactively declared successful.
+
+Sources:
+- [ODF 4.22 Regional DR guide, section 4.11](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index)
+- [Ramen namespace SCC retention implementation](https://github.com/RamenDR/ramen/blob/main/internal/controller/drplacementcontrol.go)
+- The deployed `oc explain drpc.spec.retainNamespaceSCCAcrossPeers` contract is
+  authoritative for this installed release; upstream main alone is not version proof.
