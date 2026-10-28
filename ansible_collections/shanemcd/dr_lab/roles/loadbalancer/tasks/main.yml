@@ -1,8 +1,31 @@
 ---
 - name: Install the distribution load balancer
   ansible.builtin.package:
-    name: haproxy
+    name:
+      - haproxy
+      - policycoreutils-python-utils
+      - python3-libsemanage
     state: present
+
+- name: Detect SELinux enforcement without relying on gathered facts
+  ansible.builtin.stat:
+    path: /sys/fs/selinux/enforce
+  register: lb_selinux
+
+- name: Allow HAProxy to bind the OpenShift API and machine config ports
+  community.general.seport:
+    ports: '6443,22623'
+    proto: tcp
+    setype: http_port_t
+    state: present
+  when: lb_selinux.stat.exists
+
+- name: Allow HAProxy backend connections through the distribution SELinux policy
+  ansible.posix.seboolean:
+    name: haproxy_connect_any
+    state: true
+    persistent: true
+  when: lb_selinux.stat.exists
 
 - name: Create the private lab load balancer configuration directory
   ansible.builtin.file:
@@ -42,3 +65,14 @@
     state: "{{ 'restarted' if lb_cfg.changed or lb_unit.changed else 'started' }}"
     enabled: true
     daemon_reload: "{{ lb_unit.changed }}"
+
+- name: Require an actual API listener rather than only an accepted systemd start
+  ansible.builtin.wait_for:
+    host: "{{ item.api_vip }}"
+    port: 6443
+    state: started
+    timeout: 30
+    connect_timeout: 2
+  loop: "{{ compact_clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
