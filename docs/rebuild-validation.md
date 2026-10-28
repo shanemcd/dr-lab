@@ -31,6 +31,18 @@ primary install completion; recovery bootstrap cleanup and all add-on stages
 remain ahead. No manual cluster repair, stage restart, or operator patch was
 applied. Hub disk-boot NTP was observed at Stratum 4 / Leap Normal.
 
+At 06:28 UTC (iteration 28), the same invocation remains active. All three
+installer completion and exact Ready-membership/schedulability gates passed;
+both compact bootstrap domains were removed through the source ownership guards.
+OpenShift Virtualization operator gates passed on both sites, followed by ACM
+hub installation, spoke availability, and add-on availability gates. The run is
+now installing primary storage: CephCluster reports Ready / HEALTH_OK, while
+StorageCluster is still Progressing and NooBaa database initialization has begun.
+Recovery storage and subsequent transport/DR/verification stages remain ahead.
+No deployment restart, manual operator repair, or stage skipping was performed.
+These are intermediate results, not a successful full-site recap or VM execution
+claim; Ceph's vendor-default authentication caveats still apply.
+
 Host-local logs (may contain credentials; retain privately):
 - `/tmp/dr-full-teardown-26.log`, exit marker `/tmp/dr-full-teardown-26.rc` = 0.
 - `/tmp/dr-full-site-26.log`, exit marker `/tmp/dr-full-site-26.rc` when finished.
