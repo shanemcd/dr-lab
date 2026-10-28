@@ -160,3 +160,6 @@
 
 - name: Verify dynamically provisioned RBD PVC
   ansible.builtin.include_tasks: smoke.yml
+
+- name: Verify NooBaa and dynamically provisioned object storage
+  ansible.builtin.include_tasks: object-smoke.yml

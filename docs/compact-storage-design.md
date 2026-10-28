@@ -15,6 +15,16 @@ The storage role now uses:
    portable false, 119 GiB requested per device, mon host path `/var/lib/rook`.
 6. StorageCluster Ready, Ceph HEALTH_OK, and a dynamically provisioned 1 GiB
    block RBD PVC binding in a test namespace.
+7. NooBaa Ready, a dynamically provisioned ObjectBucketClaim Bound, and
+   nonempty issued endpoint/configuration and credential fields. The lab-only
+   smoke bucket is reused on reruns and removed with full cluster teardown.
+   Credential reads are `no_log`; no live keys are written to repository files.
+
+The object gate tests provisioning, not authenticated S3 put/get or remote
+TLS/overlay reachability. Those checks remain necessary in the DR layer.
+NooBaa readiness is a prerequisite in the ODF 4.22 Regional DR guide, section
+4.5 (and the policy workflow in section 4.8):
+https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.22/html/configuring_openshift_data_foundation_disaster_recovery_for_openshift_workloads/index
 
 There is no SINGLE_NODE override, CSV editing, topology-map/status patch,
 replica-1 pool, or post-install VM disk hotplug. The old SNO-specific disk

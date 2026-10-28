@@ -1,0 +1,74 @@
+---
+- name: Require NooBaa readiness for Regional DR object protection
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - noobaa/noobaa
+      - '-n'
+      - "{{ storage_odf_namespace }}"
+      - '-o'
+      - 'jsonpath={.status.phase}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_noobaa_ready
+  until: storage_noobaa_ready.rc == 0 and storage_noobaa_ready.stdout == 'Ready'
+  retries: 120
+  delay: 10
+  changed_when: false
+
+# Reuse this lab-only bucket on reruns, just like the RBD smoke PVC. Full
+# infrastructure teardown removes it with the cluster. Never print its keys.
+- name: Exercise NooBaa dynamic bucket provisioning
+  ansible.builtin.command:
+    argv: ["{{ install_bin_dir }}/oc", apply, '-f', '-']
+    stdin: |
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: object-provisioning-test
+        namespace: dr-storage-smoke
+      spec:
+        generateBucketName: dr-storage-smoke
+        storageClassName: {{ storage_odf_namespace }}.noobaa.io
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_bucket_apply
+  changed_when: "'created' in storage_bucket_apply.stdout or 'configured' in storage_bucket_apply.stdout"
+
+- name: Wait for the object bucket claim to bind
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - get
+      - objectbucketclaim/object-provisioning-test
+      - '-n'
+      - dr-storage-smoke
+      - '-o'
+      - 'jsonpath={.status.phase}'
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_bucket_bound
+  until: storage_bucket_bound.rc == 0 and storage_bucket_bound.stdout == 'Bound'
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Require issued bucket endpoint and credentials without logging secrets
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ install_bin_dir }}/oc get configmap/object-provisioning-test secret/object-provisioning-test \
+      -n dr-storage-smoke -o json | python3 -c '
+    import json, sys
+    objects = {item["kind"]: item.get("data", {}) for item in json.load(sys.stdin)["items"]}
+    assert all(objects.get("ConfigMap", {}).get(k) for k in ("BUCKET_NAME", "BUCKET_HOST", "BUCKET_PORT"))
+    assert all(objects.get("Secret", {}).get(k) for k in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"))
+    '
+  environment:
+    KUBECONFIG: "{{ cluster_kubeconfig }}"
+  register: storage_bucket_credentials
+  until: storage_bucket_credentials.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+  no_log: true
