@@ -310,6 +310,13 @@
     state: absent
   tags: network
 
+- name: Remove the owned lab NTP relay permission
+  ansible.builtin.blockinfile:
+    path: /etc/chrony.conf
+    marker: "# {mark} DR-LAB NTP RELAY"
+    state: absent
+  notify: Restart host chronyd after relay removal
+
 - name: Remove the ip_forward sysctl drop-in
   ansible.builtin.file:
     path: "/etc/sysctl.d/{{ network_sysctl_conf_name }}"

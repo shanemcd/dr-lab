@@ -1,0 +1,17 @@
+---
+- name: Reconcile lab time sources on existing clusters
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Resolve workspace identity
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.workspace
+    - name: Configure synchronized host relay
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.host_prep
+        tasks_from: time.yml
+    - name: Reconcile installed master time configuration
+      ansible.builtin.import_role:
+        name: shanemcd.dr_lab.install_config
+        tasks_from: time-sync.yml

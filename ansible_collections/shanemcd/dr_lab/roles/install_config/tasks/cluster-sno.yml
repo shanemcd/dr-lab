@@ -125,6 +125,12 @@
         mc_role: "master"
         mc_hostname_b64: "{{ install_config_mc_hostname_b64 }}"
 
+    - name: Render synchronized guest time MachineConfig
+      ansible.builtin.template:
+        src: lab-chrony-machineconfig.yaml.j2
+        dest: "{{ install_dir }}/openshift/99-dr-lab-master-chrony.yaml"
+        mode: "0600"
+
     - name: Create the single-node (bootstrap-in-place) ignition config
       ansible.builtin.command:
         argv:

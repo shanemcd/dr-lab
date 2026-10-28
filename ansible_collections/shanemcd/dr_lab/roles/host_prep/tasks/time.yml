@@ -1,0 +1,21 @@
+---
+- name: Allow only the lab subnet to use the synchronized host NTP relay
+  ansible.builtin.blockinfile:
+    path: /etc/chrony.conf
+    marker: "# {mark} DR-LAB NTP RELAY"
+    block: "allow {{ lab_subnet_cidr }}"
+  register: host_prep_chrony_relay
+
+- name: Enable chronyd and load relay configuration
+  ansible.builtin.service:
+    name: chronyd
+    enabled: true
+    state: "{{ 'restarted' if host_prep_chrony_relay.changed else 'started' }}"
+
+- name: Wait for the host NTP relay to synchronize upstream
+  ansible.builtin.command: chronyc tracking
+  register: host_prep_chrony_tracking
+  changed_when: false
+  until: "'Leap status     : Normal' in host_prep_chrony_tracking.stdout"
+  retries: 30
+  delay: 5

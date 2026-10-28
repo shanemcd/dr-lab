@@ -23,6 +23,43 @@
   Fix reachable time service declaratively and investigate documented Ceph
   key migration requirements; do not silence warnings or weaken health gates.
 
+## Time synchronization and CephX investigation
+
+The host is synchronized to reachable upstream NTP servers, but the guests'
+public NTP pools are unreachable. Host preparation now adds an owned chrony
+`allow` block for the lab subnet only. It does not enable `local stratum` or
+advertise an unsynchronized clock. Fresh SNO and compact ignition includes the
+same master MachineConfig pointing chrony to the lab gateway. For existing
+clusters, `ansible-playbook ansible_collections/shanemcd/dr_lab/playbooks/sync_time.yml`
+reconciles that configuration and waits for the master pools. This can reboot
+nodes through normal MCO drains; the hub API is unavailable during its SNO reboot.
+Full teardown removes only the owned relay block, preserving host upstreams.
+
+CephX findings must be distinguished from the real clock warning:
+
+- Upstream AES256K CSI keys require kernel support and Ceph-CSI >=3.16.3.
+  Do not rotate CSI keys or restrict allowed ciphers based solely on a
+  health warning: doing so can cut off storage clients.
+- Current RHCOS kernel is `5.14.0-687.50.1.el9_8.aarch64`; its libceph module
+  contains `ceph_krb5_encrypt`/`ceph_krb5_decrypt`. Thus its version number alone
+  does NOT prove absence of support. Ceph's advisory explicitly notes backports
+  to CentOS Stream 9/10. Verify vendor compatibility and actual mounts first.
+- Live daemon/admin keys already use AES256K. The six AES client entities are
+  four CSI identities, `client.ocs-metrics-exporter-ceph-auth`, and
+  `client.rbd-mirror-peer`. There is no demonstrated reason to rotate daemon
+  keys again. StorageCluster exposes managedResources.cephCluster.security.cephx
+  controls; any eventual rotation must use its owning API, not edit generated
+  secrets or operator deployments.
+- Direct `ceph health detail` revealed the operator's existing sticky mutes on
+  the four authentication compatibility warnings. The lab did NOT apply these
+  mutes (none appear in its manifests or CephCluster healthCheck spec). A future
+  HEALTH_OK result therefore does not establish AES256K-only client security.
+  Report these vendor defaults explicitly; do not claim warnings were fixed.
+
+References:
+https://www.rook.io/docs/rook/v1.19/Storage-Configuration/Advanced/cephx-key-rotation
+https://ceph.io/en/news/blog/2026/v20-2-4-v19-2-6-combo-released
+
 ## Intended configuration
 
 Each managed cluster has three schedulable control-plane nodes. Every node

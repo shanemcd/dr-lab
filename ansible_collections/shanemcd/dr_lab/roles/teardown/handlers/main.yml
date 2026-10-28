@@ -1,0 +1,5 @@
+---
+- name: Restart host chronyd after relay removal
+  ansible.builtin.service:
+    name: chronyd
+    state: restarted

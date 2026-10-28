@@ -52,6 +52,15 @@ network_hosts_block: >-
 # Convenience derivations (single source of truth = the suffixes above).
 lab_gateway_ip: "{{ lab_subnet_prefix }}.{{ host_gateway_suffix }}"
 
+# Guests cannot reach the host's corporate NTP servers directly. Relay
+# synchronized time, never advertise an unsynchronized local clock.
+lab_chrony_config: |
+  server {{ lab_gateway_ip }} iburst
+  driftfile /var/lib/chrony/drift
+  makestep 1.0 3
+  rtcsync
+  logdir /var/log/chrony
+
 # Per-cluster derivations (loop over lab_nodes / clusters).
 cluster_domain: "{{ cluster_name }}.{{ base_domain }}"
 cluster_ip: "{{ lab_subnet_prefix }}.{{ cluster_ip_suffix }}"

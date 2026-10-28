@@ -1,0 +1,38 @@
+---
+# Upgrade path for existing clusters; fresh installs consume the same template
+# before ignition generation and need no post-install mutation.
+- name: Reconcile guest time MachineConfig on each cluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'lab-chrony-machineconfig.yaml.j2') | from_yaml }}"
+  loop: "{{ clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Wait for time MachineConfig master pool rollout
+  ansible.builtin.command:
+    argv:
+      - "{{ install_bin_dir }}/oc"
+      - "--kubeconfig={{ install_base_dir }}/{{ item.name }}/auth/kubeconfig"
+      - "--request-timeout=20s"
+      - get
+      - machineconfigpool
+      - master
+      - -o
+      - json
+  register: install_config_time_pool
+  changed_when: false
+  until: >-
+    install_config_time_pool.rc == 0 and
+    (install_config_time_pool.stdout | from_json).status.updatedMachineCount ==
+    (install_config_time_pool.stdout | from_json).status.machineCount and
+    (install_config_time_pool.stdout | from_json).status.readyMachineCount ==
+    (install_config_time_pool.stdout | from_json).status.machineCount and
+    '99-dr-lab-master-chrony' in
+    ((install_config_time_pool.stdout | from_json).status.configuration.source | map(attribute='name') | list)
+  retries: 180
+  delay: 15
+  loop: "{{ clusters }}"
+  loop_control:
+    label: "{{ item.name }}"

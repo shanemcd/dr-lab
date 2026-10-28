@@ -94,6 +94,12 @@
           - "{{ install_dir }}"
       changed_when: true
 
+    - name: Render synchronized guest time MachineConfig
+      ansible.builtin.template:
+        src: lab-chrony-machineconfig.yaml.j2
+        dest: "{{ install_dir }}/openshift/99-dr-lab-master-chrony.yaml"
+        mode: "0600"
+
     - name: Create ignition configs
       # Emits bootstrap.ign, master.ign, worker.ign (unused: no workers),
       # metadata.json + auth/.
