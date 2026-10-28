@@ -24,6 +24,20 @@ class AcmCsvTests(unittest.TestCase):
         self.assertNotIn('--all', argv)
         self.assertIn('--for=jsonpath={.status.phase}=Succeeded', argv)
 
+    def test_virtualization_avoids_replacing_csvs_and_partial_rollout(self):
+        tasks = yaml.safe_load((ROOT / 'ansible_collections/shanemcd/dr_lab/roles/virtualization/tasks/cluster.yml').read_text())
+        selected = next(t for t in tasks if t.get('register') == 'virtualization_csv_created')
+        self.assertIn('subscriptions.operators.coreos.com', selected['ansible.builtin.command']['argv'])
+        self.assertIn('jsonpath={.status.installedCSV}', selected['ansible.builtin.command']['argv'])
+        ready = next(t for t in tasks if t['name'] == 'Wait for the operator CSV to report Succeeded')
+        self.assertNotIn('--all', ready['ansible.builtin.command']['argv'])
+        self.assertIn('csv/{{ virtualization_csv_created.stdout }}', ready['ansible.builtin.command']['argv'])
+        fleet = next(t for t in tasks if t['name'] == 'Assert every virt deployment is fully ready')
+        checks = ' '.join(fleet['ansible.builtin.assert']['that'])
+        self.assertIn('updatedReplicas', checks)
+        self.assertIn('observedGeneration', checks)
+        self.assertIn('== item.spec.replicas', checks)
+
 
 if __name__ == '__main__':
     unittest.main()

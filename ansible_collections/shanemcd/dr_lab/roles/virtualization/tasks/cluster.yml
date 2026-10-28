@@ -64,20 +64,21 @@
   register: virtualization_sub_result
   changed_when: "'created' in virtualization_sub_result.stdout"
 
-- name: Wait for the operator CSV to be created
+- name: Resolve this virtualization subscription's installed CSV
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
       - get
-      - csv
+      - subscriptions.operators.coreos.com
+      - "{{ virtualization_package }}"
       - "-n"
       - "{{ virtualization_namespace }}"
       - "-o"
-      - 'jsonpath={.items[*].metadata.name}'
+      - 'jsonpath={.status.installedCSV}'
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   register: virtualization_csv_created
-  until: virtualization_csv_created.stdout | length > 0
+  until: virtualization_csv_created.rc == 0 and virtualization_csv_created.stdout | length > 0
   retries: 30
   delay: 10
   changed_when: false
@@ -88,10 +89,9 @@
       - "{{ install_bin_dir }}/oc"
       - wait
       - "--for=jsonpath={.status.phase}=Succeeded"
-      - csv
+      - "csv/{{ virtualization_csv_created.stdout }}"
       - "-n"
       - "{{ virtualization_namespace }}"
-      - "--all"
       - "--timeout={{ (virtualization_csv_timeout_minutes | int) * 60 }}s"
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
@@ -146,7 +146,7 @@
       - "-n"
       - "{{ virtualization_namespace }}"
       - "-o"
-      - 'jsonpath={range .items[*]}{.metadata.name}{" "}{.status.readyReplicas}{" "}{.spec.replicas}{"\n"}{end}'
+      - json
   environment:
     KUBECONFIG: "{{ cluster_kubeconfig }}"
   register: virtualization_deployments
@@ -155,19 +155,19 @@
 - name: Assert every virt deployment is fully ready
   ansible.builtin.assert:
     that:
-      - virtualization_deployments.stdout_lines | length > 0
-      - virtualization_deployments.stdout_lines
-        | select('search', ' 0 ') | list | length == 0
-      - virtualization_deployments.stdout_lines
-        | reject('search', '^\S+ \d+ \d+$') | list | length == 0
-    fail_msg: >-
-      {{ cluster_name }} virt deployments not all ready —
-      {{ virtualization_deployments.stdout_lines | default([]) | join('; ') }}
+      - (virtualization_deployments.stdout | from_json)['items'] | length > 0
+      - item.status.readyReplicas | default(0) | int == item.spec.replicas | default(1) | int
+      - item.status.updatedReplicas | default(0) | int == item.spec.replicas | default(1) | int
+      - item.status.observedGeneration | default(0) | int >= item.metadata.generation | int
+    fail_msg: "{{ cluster_name }} deployment/{{ item.metadata.name }} is not fully rolled out."
+  loop: "{{ (virtualization_deployments.stdout | from_json)['items'] }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
 
 - name: Cluster virtualization summary
   ansible.builtin.debug:
     msg: >-
       {{ cluster_name }} virtualization OK — operator CSV Succeeded
       ({{ virtualization_channel }}), HCO {{ virtualization_hco_name }}
-      Available, {{ virtualization_deployments.stdout_lines | length }}
+      Available, {{ (virtualization_deployments.stdout | from_json)['items'] | length }}
       deployments ready in {{ virtualization_namespace }}.

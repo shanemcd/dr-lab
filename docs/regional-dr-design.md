@@ -66,7 +66,12 @@ those are owned by orchestration. Stage12 reproduces that payload, refuses
 changes to existing identity/spec fields, and waits for typed Validated conditions,
 DR-cluster operator rollout and StorageClusterPeer Peered on both sites.
 This is implementation evidence, not a claim that policy/mirroring/failover
-already passed; actual policy validation remains in progress.
+already passed. Update 04:23 UTC: the first stage12 run subsequently passed
+all gates (19 ok, 1 changed, 0 failed); an immediate rerun also passed
+(21 ok, 0 changed, 0 failed). MirrorPeer Ready, both DRClusters Validated,
+DRPolicy Validated, both managed DR-cluster operators rolled out, both storage
+peers Peered, and both namespace mirroring summaries all OK were verified.
+Actual protected VM failover remains unverified.
 
 At first policy creation, tokenexchange/onboarding/S3-secret creation produced
 normal retries, plus a recovered orchestrator panic while endpoint lists were
@@ -78,7 +83,9 @@ requeues missing S3 secrets using rate-limited `Requeue: true`; its watches cove
 generation changes, tokenexchange add-ons and selected ConfigMaps, not Secrets.
 Repeated early retries can therefore delay observation after a secret arrives.
 We are allowing normal reconciliation, not forcing a restart or status patch.
-This delay is a diagnosis hypothesis until the next reconciliation is observed.
+Update 04:23 UTC: normal reconciliation completed without intervention and
+stage12 passed, followed by a zero-change rerun. Waiting rather than restarting
+or patching the operator preserved the no-hacks path.
 
 ## Discovered workload protection contract (not yet deployed)
 

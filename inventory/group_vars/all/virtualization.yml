@@ -5,8 +5,8 @@ virtualization_clusters:
   - dr-primary
   - dr-recovery
 
-# The operator lands in its own namespace; the HCO InstallMode is
-# AllNamespaces (the only mode the CSV publishes).
+# The operator lands in its own namespace. Live 4.22 stable catalog supports
+# OwnNamespace/SingleNamespace, not AllNamespaces; keep the OG scoped here.
 virtualization_namespace: openshift-cnv
 virtualization_operatorgroup: kubevirt-hyperconverged
 
