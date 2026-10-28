@@ -38,7 +38,7 @@ bootstrap_disk: "60G"
 # --- hub SNO sizing --------------------------------------------------------
 hub_vcpu: 12
 hub_ram: "40G"
-hub_disk: "200G"
+hub_disk: "160G"
 
 clusters:
   - name: dr-hub

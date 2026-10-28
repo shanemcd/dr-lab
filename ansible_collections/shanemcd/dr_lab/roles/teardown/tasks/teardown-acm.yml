@@ -55,12 +55,12 @@
       register: teardown_acm_ns
       changed_when: teardown_acm_ns.stdout | length > 0
 
-    - name: Remove the MultiClusterEngine custom resource
+    - name: Remove the MultiClusterHub custom resource
       ansible.builtin.command:
         argv:
           - "{{ install_bin_dir }}/oc"
           - delete
-          - "multiclusterengine/{{ acm_cr_name }}"
+          - "multiclusterhub/{{ acm_cr_name }}"
           - "-n"
           - "{{ acm_namespace }}"
           - "--ignore-not-found"
@@ -86,7 +86,7 @@
       register: teardown_acm_sub
       changed_when: teardown_acm_sub.stdout | length > 0
 
-    - name: Remove the multicluster-engine namespace
+    - name: Remove the ACM namespace
       ansible.builtin.command:
         argv:
           - "{{ install_bin_dir }}/oc"

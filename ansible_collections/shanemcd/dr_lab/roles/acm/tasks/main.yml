@@ -16,7 +16,7 @@
   ansible.builtin.set_fact:
     acm_hub_kubeconfig: "{{ install_base_dir }}/{{ acm_cluster }}/auth/kubeconfig"
 
-- name: Ensure the multicluster engine namespace
+- name: Ensure the ACM namespace
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
@@ -28,6 +28,8 @@
       kind: Namespace
       metadata:
         name: {{ acm_namespace }}
+        labels:
+          openshift.io/cluster-monitoring: "true"
   environment:
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
   register: acm_ns_result
@@ -47,7 +49,7 @@
         name: {{ acm_operatorgroup }}
         namespace: {{ acm_namespace }}
       spec:
-        # MCE publishes OwnNamespace only.
+        # Scope the ACM operator to its installation namespace.
         targetNamespaces:
           - {{ acm_namespace }}
       ---
@@ -100,7 +102,7 @@
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
   changed_when: false
 
-- name: Ensure the MultiClusterEngine custom resource
+- name: Ensure the MultiClusterHub custom resource
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
@@ -108,23 +110,27 @@
       - "-f"
       - "-"
     stdin: |
-      apiVersion: multicluster.openshift.io/v1
-      kind: MultiClusterEngine
+      apiVersion: operator.open-cluster-management.io/v1
+      kind: MultiClusterHub
       metadata:
         name: {{ acm_cr_name }}
-      spec: {}
+        namespace: {{ acm_namespace }}
+      spec:
+        availabilityConfig: Basic
   environment:
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
   register: acm_cr_result
   changed_when: "'created' in acm_cr_result.stdout"
 
-- name: Wait for the MultiClusterEngine Available condition
+- name: Wait for the MultiClusterHub to be Running
   ansible.builtin.command:
     argv:
       - "{{ install_bin_dir }}/oc"
       - wait
-      - "--for=condition=Available"
-      - "multiclusterengine/{{ acm_cr_name }}"
+      - "--for=jsonpath={.status.phase}=Running"
+      - "multiclusterhub/{{ acm_cr_name }}"
+      - "-n"
+      - "{{ acm_namespace }}"
       - "--timeout={{ (acm_cr_timeout_minutes | int) * 60 }}s"
   environment:
     KUBECONFIG: "{{ acm_hub_kubeconfig }}"
@@ -139,6 +145,6 @@
 - name: ACM summary
   ansible.builtin.debug:
     msg: >-
-      ACM OK on {{ acm_cluster }} — MCE {{ acm_cr_name }} Available
+      ACM OK on {{ acm_cluster }} — MultiClusterHub {{ acm_cr_name }} Running
       ({{ acm_channel }}); spokes imported and Available with add-ons
       ({{ acm_spoke_addons | join(', ') }}): {{ acm_spokes | join(', ') }}.

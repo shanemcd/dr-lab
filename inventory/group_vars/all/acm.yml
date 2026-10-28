@@ -1,32 +1,22 @@
 ---
-# ACM (multicluster engine) on the hub, and the spokes it manages.
+# Full ACM is required by Regional-DR (Search, policies and Submariner).
+# MultiClusterHub owns its bundled MCE; do not install a second standalone MCE.
 acm_cluster: dr-hub
 acm_spokes:
   - dr-primary
   - dr-recovery
+acm_namespace: open-cluster-management
+acm_operatorgroup: open-cluster-management
+acm_channel: release-2.17
+acm_package: advanced-cluster-management
+acm_cr_name: multiclusterhub
 
-# The operator lands in its own namespace; the MCE CSV publishes
-# OwnNamespace only.
-acm_namespace: multicluster-engine
-acm_operatorgroup: multicluster-engine
-
-# Channel and CR names — stable-2.17 tracks the 4.22-era release.
-acm_channel: stable-2.17
-acm_package: multicluster-engine
-acm_cr_name: multicluster-engine
-
-# Add-ons enabled on every spoke (cluster-proxy is needed by ACM functions
-# that proxy into spokes; search-collector by the ODF Console DR
-# enrollment wizard, which queries ACM Search). submariner is enabled by
-# the later submariner layer, not here.
-# Add-ons enabled on each imported spoke. search-collector is NOT listed:
-# the search back end ships with full ACM (MultiClusterHub), not with bare
-# multicluster-engine, so the add-on would sit Unknown forever.
+# Search is available with full ACM. Submariner is configured by the DR layer.
 acm_spoke_addons:
   - work-manager
   - cluster-proxy
+  - search-collector
 
-# Convergence knobs.
 acm_csv_timeout_minutes: 20
 acm_cr_timeout_minutes: 30
 acm_import_timeout_minutes: 20
