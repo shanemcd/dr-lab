@@ -68,6 +68,39 @@ DR-cluster operator rollout and StorageClusterPeer Peered on both sites.
 This is implementation evidence, not a claim that policy/mirroring/failover
 already passed; actual policy validation remains in progress.
 
+At first policy creation, tokenexchange/onboarding/S3-secret creation produced
+normal retries, plus a recovered orchestrator panic while endpoint lists were
+still empty. Both StorageClusterPeers subsequently reached Peered; namespace
+mirroring daemon/image/group/overall health all became OK. Only the primary
+DRCluster existed at the last snapshot. The release-4.22
+[MirrorPeer controller](https://github.com/red-hat-storage/odf-multicluster-orchestrator/blob/release-4.22/controllers/odf/mirrorpeer_controller.go)
+requeues missing S3 secrets using rate-limited `Requeue: true`; its watches cover
+generation changes, tokenexchange add-ons and selected ConfigMaps, not Secrets.
+Repeated early retries can therefore delay observation after a secret arrives.
+We are allowing normal reconciliation, not forcing a restart or status patch.
+This delay is a diagnosis hypothesis until the next reconciliation is observed.
+
+## Discovered workload protection contract (not yet deployed)
+
+The same deployed console's
+`packages/mco/components/discovered-application-wizard/utils/k8s-utils.ts`
+creates a dummy `cluster.open-cluster-management.io/v1beta1` Placement in
+`openshift-dr-ops` with the protected-application annotation and
+`spec.predicates: []`. It creates a DRPlacementControl alongside it, with
+preferredCluster, protectedNamespaces, pvcSelector, kubeObjectProtection
+(captureInterval plus either recipeRef/recipeParameters or kubeObjectSelector),
+drPolicyRef and a fully typed placementRef. This avoids inventing a GitOps
+application solely to manage a discovered VM. A recipe is not automatically
+inserted by this wizard. The live DRPC CRD confirms those fields.
+
+The VM stage must still determine an appropriate VM-consistent protection
+recipe (if required), establish actual replication/capture readiness and
+perform failover, not only create these objects. Any infrastructure-powered
+source fencing must be ownership-guarded and observed complete before target
+activation; a manually asserted fence without physical evidence is prohibited.
+Source and recovery VMs must not run simultaneously. No VM, DRPC or actual
+failover has been validated yet, and nested KVM is still unavailable.
+
 ## Live catalog discovery (2026-10-27)
 
 Read-only discovery against the rebuilt dr-recovery API returned 635 package manifests.
