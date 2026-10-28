@@ -1,0 +1,15 @@
+---
+# Infrastructure-only entry point for installation/debugging. site.yml adds
+# cluster services and end-to-end verification after these same stages.
+- name: Host preparation stage
+  import_playbook: 01_host_prep.yml
+- name: Artifact stage
+  import_playbook: 02_artifacts.yml
+- name: Lab network stage
+  import_playbook: 03_network.yml
+- name: Install config and ignition stage
+  import_playbook: 04_ignition.yml
+- name: Cluster VM stage
+  import_playbook: 05_snos.yml
+- name: Cluster install stage
+  import_playbook: 06_install.yml

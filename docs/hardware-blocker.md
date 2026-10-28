@@ -49,7 +49,14 @@ ARM64 OpenShift Virtualization support must not be confused with support for
 nesting on this particular processor. The local QEMU failure independently
 confirms that this host cannot expose the required virtualization extensions.
 
-## Decision needed before destructive rebuild
+## User decision: proceed with the rest first
+
+The user subsequently authorized continuing the cluster/storage/ACM/DR build
+on this host, then considering software emulation only after those layers run.
+The VM need only remain running during failover, with no substantial workload.
+Emulation has not been implemented or validated. It remains distinct from KVM.
+
+The alternatives originally presented were:
 
 Choose either:
 
@@ -61,5 +68,6 @@ Choose either:
    but **does not satisfy the requested VM failover test**. ODF/DR architecture
    and version support still need independent verification.
 
-Until that choice is made, do not tear down the current lab or claim completion
-of the one-shot rebuild or VM failover objective.
+The cluster rebuild is now authorized and underway. The opening observations
+above describe the pre-rebuild state. Do not claim completion of the one-shot
+rebuild or VM failover objective until independently verified.

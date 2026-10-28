@@ -30,7 +30,7 @@
 - name: Undefine only the lab domain (never remove storage implicitly)
   tags: vms
   ansible.builtin.command:
-    argv: [virsh, -c, "{{ libvirt_uri }}", undefine, "{{ node.name }}"]
+    argv: [virsh, -c, "{{ libvirt_uri }}", undefine, "{{ node.name }}", --nvram]
   when: teardown_domain_uuid.rc == 0
   changed_when: true
 
@@ -41,6 +41,7 @@
     state: absent
   loop:
     - "{{ libvirt_runtime_dir }}/{{ node.name }}.qcow2"
+    - "{{ libvirt_runtime_dir }}/{{ node.name }}-data.raw"
     - "{{ libvirt_runtime_dir }}/{{ node.name }}.ign"
     - "/var/log/libvirt/qemu/{{ node.name }}.serial.log"
     - "{{ vm_run_dir }}/{{ node.name }}.xml"

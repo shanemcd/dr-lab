@@ -14,6 +14,8 @@ install_base_dir: "{{ lab_user_home }}/ocp-install-dr"
 install_bin_dir: "{{ install_base_dir }}/bin"
 install_dir: "{{ install_base_dir }}/{{ cluster_name }}"
 vm_assets_dir: "{{ lab_user_home }}/ocp-dr"
+loadbalancer_state_dir: /etc/dr-lab/loadbalancer
+vms_master_iso_name: rhcos-install.iso
 artifacts_dir: "{{ vm_assets_dir }}/artifacts"
 artifacts_downloads_dir: "{{ artifacts_dir }}/downloads"
 vm_images_dir: "{{ vm_assets_dir }}/images"

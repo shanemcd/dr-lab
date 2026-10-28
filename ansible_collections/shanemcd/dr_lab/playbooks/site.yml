@@ -2,18 +2,8 @@
 # Full pipeline. The numeric prefixes ARE the import order; stages can be
 # run individually via the numbered playbooks. Verification and teardown
 # run explicitly.
-- name: Host preparation stage
-  import_playbook: 01_host_prep.yml
-- name: Artifact construction stage (client tools, RHCOS live ISO)
-  import_playbook: 02_artifacts.yml
-- name: Lab network stage
-  import_playbook: 03_network.yml
-- name: Install config and ignition stage
-  import_playbook: 04_ignition.yml
-- name: SNO VM stage
-  import_playbook: 05_snos.yml
-- name: Cluster install stage
-  import_playbook: 06_install.yml
+- name: Cluster infrastructure stages
+  import_playbook: core.yml
 - name: OpenShift Virtualization stage
   import_playbook: 07_virtualization.yml
 - name: ACM stage

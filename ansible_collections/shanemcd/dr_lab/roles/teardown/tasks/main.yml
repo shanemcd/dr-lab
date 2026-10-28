@@ -25,10 +25,17 @@
 # then the destroy force fallback for wedged guests. Never serial
 # per-VM waits.
 
+- name: Include current guests and legacy SNO names in the cleanup inventory
+  ansible.builtin.set_fact:
+    teardown_nodes: >-
+      {{ (lab_nodes + bootstrap_nodes + (clusters | map(attribute='name')
+         | map('community.general.dict_kv', 'name') | list)) | unique(attribute='name') | list }}
+  tags: vms
+
 - name: Check whether each lab domain is defined
   ansible.builtin.command:
     argv: [virsh, -c, "{{ libvirt_uri }}", domuuid, "{{ item.name }}"]
-  loop: "{{ lab_nodes }}"
+  loop: "{{ teardown_nodes }}"
   loop_control:
     label: "{{ item.name }}"
   register: teardown_domain_uuid
@@ -132,7 +139,7 @@
   # The included tasks carry `tags: vms` themselves — include_tasks children
   # do NOT inherit the include task's tags on their own (no `apply` support
   # in ansible-core 2.19's include refactor).
-  loop: "{{ lab_nodes }}"
+  loop: "{{ teardown_nodes }}"
   loop_control:
     loop_var: node
     label: "{{ node.name }}"
@@ -156,6 +163,7 @@
 
 - name: Remove the ACM layer
   ansible.builtin.include_tasks: teardown-acm.yml
+  when: "'all' not in ansible_run_tags and 'vms' not in ansible_run_tags"
   tags: acm
 
 # --- Layer: virtualization (per cluster) -------------------------------------
@@ -164,13 +172,43 @@
 
 - name: Remove the OpenShift Virtualization layer
   ansible.builtin.include_tasks: teardown-virtualization.yml
-  loop: "{{ lab_nodes | selectattr('name', 'in', virtualization_clusters) | list }}"
+  loop: "{{ clusters | selectattr('name', 'in', virtualization_clusters) | list }}"
+  when: "'all' not in ansible_run_tags and 'vms' not in ansible_run_tags"
   loop_control:
     loop_var: teardown_virt_node
   # included tasks carry `tags: virtualization` themselves
   tags: virtualization
 
 # --- Layer: network ----------------------------------------------------------
+
+- name: Inspect the dedicated lab load balancer unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/dr-lab-lb.service
+  register: teardown_lb_unit
+  tags: network
+
+- name: Stop the lab load balancer before removing its bridge
+  ansible.builtin.systemd_service:
+    name: dr-lab-lb.service
+    state: stopped
+    enabled: false
+  when: teardown_lb_unit.stat.exists
+  tags: network
+
+- name: Remove only the lab load balancer configuration and unit
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/dr-lab-lb.service
+    - "{{ loadbalancer_state_dir }}"
+  tags: network
+
+- name: Reload units after removing the lab service
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: teardown_lb_unit.stat.exists
+  tags: network
 
 - name: Inspect the lab libvirt network
   ansible.builtin.command:
@@ -313,7 +351,7 @@
   ansible.builtin.file:
     path: "{{ install_base_dir }}/{{ item.name }}"
     state: absent
-  loop: "{{ lab_nodes }}"
+  loop: "{{ clusters }}"
   loop_control:
     label: "{{ item.name }}"
   tags: install-data
